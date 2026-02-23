@@ -1,0 +1,155 @@
+name: mac-system-automation
+
+on:
+  workflow_dispatch:
+    inputs:
+      debug_mode:
+        description: 'Enable VNC for monitoring and VS Code server'
+        required: false
+        default: true
+        type: boolean
+
+jobs:
+  mac-system:
+    runs-on: macos-latest
+    permissions:
+      contents: write
+      
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Create session directories
+        run: |
+          mkdir -p .vscode-session/data
+          mkdir -p .vscode-session/extensions
+          mkdir -p logs
+
+      - name: Setup macOS Screen Sharing (VNC)
+        run: |
+          # Enable VNC with password 'runner'
+          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -activate -configure -access -on -clientopts -setvnclegacy -vnclegacy yes -clientopts -setvncpw -vncpw runner -restart -agent -privs -all
+          
+          # Prevent display from sleeping
+          sudo systemsetup -setdisplaysleep off || true
+          
+          # Keep the runner awake
+          caffeinate -d &
+
+      - name: Install System Dependencies
+        run: |
+          brew update
+          brew install cloudflared tmate wget
+          
+          # Download noVNC and websockify
+          git clone https://github.com/novnc/noVNC.git
+          git clone https://github.com/novnc/websockify.git ./noVNC/utils/websockify
+
+      - name: Start Services & Tunnels
+        run: |
+          # Start NoVNC proxy (VNC is on 5900, NoVNC will listen on 6080)
+          ./noVNC/utils/novnc_proxy --vnc localhost:5900 --listen 6080 > logs/websockify.log 2>&1 &
+          
+          # Setup SSH Server (Enable remote login and set runner password to 'runner')
+          sudo systemsetup -setremotelogin on
+          sudo dscl . -passwd /Users/runner runner
+
+          # Setup VS Code Web Server
+          curl -fsSL https://code-server.dev/install.sh | sh
+          code-server --auth none --bind-addr 127.0.0.1:8080 --user-data-dir $(pwd)/.vscode-session/data --extensions-dir $(pwd)/.vscode-session/extensions > logs/code_server.log 2>&1 &
+
+          # Setup SSH Tunnel via tmate
+          tmate -S /tmp/tmate.sock new-session -d
+          tmate -S /tmp/tmate.sock wait tmate-ready
+
+          # Tunnel with Cloudflared (VNC GUI)
+          echo "=========================================================="
+          echo "Please wait for the GUI URL, SSH URL, and VS Code URL..."
+          echo "=========================================================="
+          cloudflared tunnel --url http://127.0.0.1:6080 > logs/vnc_cf.log 2>&1 &
+          
+          # Tunnel with Pinggy (SSH for VS Code)
+          ssh -4 -o StrictHostKeyChecking=no -p 443 -R 0:localhost:22 tcp@a.pinggy.io 2>&1 | tee logs/pinggy_ssh.log &
+          
+          # Tunnel with Cloudflared (VS Code Server Web)
+          cloudflared tunnel --url http://127.0.0.1:8080 > logs/vscode_cf.log 2>&1 &
+
+          # Wait for URL to appear or timeout
+          TIMEOUT_COUNTER=0
+          while true; do
+            if [ -f logs/vnc_cf.log ] && grep -E -q 'https://[a-zA-Z0-9-]+\.trycloudflare\.com' logs/vnc_cf.log; then
+              if [ -f logs/pinggy_ssh.log ] && grep -E -q 'tcp://[^ ]*\.(pgy\.in|pinggy\.link|pinggy\.io):[0-9]+' logs/pinggy_ssh.log; then
+                if [ -f logs/vscode_cf.log ] && grep -E -q 'https://[a-zA-Z0-9-]+\.trycloudflare\.com' logs/vscode_cf.log; then
+                  break
+                fi
+              fi
+            fi
+            sleep 2
+            TIMEOUT_COUNTER=$((TIMEOUT_COUNTER+1))
+            if [ $TIMEOUT_COUNTER -ge 45 ]; then
+                echo "Timeout waiting for URLs. Continuing with what we have."
+                break
+            fi
+          done
+
+          URL=$(grep -E -o 'https://[a-zA-Z0-9-]+\.trycloudflare\.com' logs/vnc_cf.log | head -n 1)
+          PINGGY_SSH=$(grep -E -o 'tcp://[^ ]*\.(pgy\.in|pinggy\.link|pinggy\.io):[0-9]+' logs/pinggy_ssh.log | head -n 1)
+          VSCODE_WEB_URL=$(grep -E -o 'https://[a-zA-Z0-9-]+\.trycloudflare\.com' logs/vscode_cf.log | tail -n 1)
+          
+          PINGGY_HOST=$(echo $PINGGY_SSH | sed -E 's|tcp://([^:]+):([0-9]+)|\1|')
+          PINGGY_PORT=$(echo $PINGGY_SSH | sed -E 's|tcp://([^:]+):([0-9]+)|\2|')
+          VSCODE_CMD="ssh runner@$PINGGY_HOST -p $PINGGY_PORT"
+          
+          # Wait for tmate SSH URL
+          TIMEOUT_COUNTER=0
+          SSH_URL=""
+          while [ -z "$SSH_URL" ] && [ $TIMEOUT_COUNTER -lt 15 ]; do
+            SSH_URL=$(tmate -S /tmp/tmate.sock display -p '#{tmate_ssh}' | grep ssh || true)
+            sleep 1
+            TIMEOUT_COUNTER=$((TIMEOUT_COUNTER+1))
+          done
+
+          echo "=========================================================="
+          echo "GUI URL: $URL/vnc.html?host=$(echo $URL | sed 's|https://||')&port=443"
+          echo "VNC Password: runner"
+          echo "VS Code Web URL: $VSCODE_WEB_URL/?folder=$(pwd)"
+          echo "VS Code SSH CMD: $VSCODE_CMD"
+          echo "VS Code SSH Password: runner"
+          echo "Tmate SSH CMD: $SSH_URL"
+          echo "=========================================================="
+
+          # Automatically commit the connection info
+          echo "VSCODE_WEB_URL: $VSCODE_WEB_URL/?folder=$(pwd)" > ssh_connection.txt
+          echo "VNC_PASSWORD: runner" >> ssh_connection.txt
+          echo "VSCODE_SSH_CMD: $VSCODE_CMD" >> ssh_connection.txt
+          echo "SSH_PASSWORD: runner" >> ssh_connection.txt
+          echo "TMATE_SSH_CMD: $SSH_URL" >> ssh_connection.txt
+          echo "GUI_URL: $URL/vnc.html?host=$(echo $URL | sed 's|https://||')&port=443" >> ssh_connection.txt
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add ssh_connection.txt
+          git commit -m "Update macos SSH connection details [skip ci]" || true
+          git push origin HEAD:main || true
+
+      - name: Interactive Session Wait
+        run: |
+          echo "Entering interactive session. Add a file named '/tmp/save' or '/tmp/continue' to stop."
+          while true; do
+            if [ -f /tmp/save ] || [ -f /tmp/continue ]; then
+                echo "Exit signal received. Terminating interactive session."
+                break
+            fi
+            sleep 5
+          done
+
+      - name: Cleanup Wait
+        if: always()
+        run: |
+          echo "Cleaning up..."
+          pkill cloudflared || true
+          pkill code-server || true
+          pkill -f novnc_proxy || true
+          pkill tmate || true
+          rm -f /tmp/save /tmp/continue

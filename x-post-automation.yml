@@ -1,0 +1,470 @@
+name: x-posting
+
+on:
+  schedule:
+    - cron: '0 * * * *'  # Run every hour at minute 0
+  workflow_dispatch:
+
+    inputs:
+      post_type:
+        description: 'Post type'
+        required: true
+        default: 'products'
+        type: choice
+        options:
+          - products
+          - story
+      manual_login:
+        description: 'Wait for manual login (tmate)'
+        required: false
+        default: false
+        type: boolean
+      debug_mode:
+        description: 'Enable VNC for monitoring (waits for /tmp/continue)'
+        required: false
+        default: false
+        type: boolean
+      auto_start:
+        description: 'Auto-start the Python posting script immediately'
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  post-to-x:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb python3-tk python3-dev scrot gnome-screenshot x11vnc novnc websockify
+          sudo apt-get install -y tesseract-ocr libtesseract-dev openssh-server libgbm1
+          wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | sudo apt-key add -
+          sudo sh -c 'echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" >> /etc/apt/sources.list.d/google-chrome.list'
+          sudo apt-get update
+          sudo apt-get install -y google-chrome-stable
+          sudo apt-get install -y xclip xsel
+          wget -q https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
+          sudo dpkg -i cloudflared-linux-amd64.deb
+      
+      - name: Cache Python virtual environment
+        uses: actions/cache@v3
+        id: cache-venv
+        with:
+          path: .venv
+          key: ${{ runner.os }}-venv-${{ hashFiles('scripts/x_posting/requirements.txt') }}
+
+      - name: Install Python dependencies
+        if: steps.cache-venv.outputs.cache-hit != 'true'
+        run: |
+          python -m venv .venv
+          source .venv/bin/activate
+          python -m pip install --upgrade pip
+          pip install pyautogui
+          pip uninstall -y numpy
+          pip install -r scripts/x_posting/requirements.txt
+          pip list | grep numpy
+
+      - name: Save Python virtual environment
+        if: steps.cache-venv.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v3
+        with:
+          path: .venv
+          key: ${{ runner.os }}-venv-${{ hashFiles('scripts/x_posting/requirements.txt') }}
+
+      - name: Activate Virtual Environment
+        run: |
+          echo "$(pwd)/.venv/bin" >> $GITHUB_PATH
+      
+      - name: Create session directories
+        run: |
+          mkdir -p .browser-session
+          mkdir -p .vscode-session/data
+          mkdir -p .vscode-session/extensions
+      
+      - name: Restore browser session
+        uses: actions/cache/restore@v3
+        with:
+          path: .browser-session
+          key: x-browser-session-${{ runner.os }}-${{ github.run_id }}
+          restore-keys: |
+            x-browser-session-${{ runner.os }}-
+
+      - name: Restore VS Code session
+        uses: actions/cache/restore@v3
+        with:
+          path: .vscode-session
+          key: vscode-session-${{ runner.os }}-${{ github.run_id }}
+          restore-keys: |
+            vscode-session-${{ runner.os }}-
+      
+      - name: Setup Virtual Display
+        run: |
+          Xvfb :99 -screen 0 1920x1080x24 &
+          echo "DISPLAY=:99" >> $GITHUB_ENV
+          sleep 3 # Wait for Xvfb to be ready
+      
+      - name: Start VNC & Wait for User (Debug Mode)
+        if: ${{ github.event_name == 'schedule' || github.event.inputs.manual_login == 'true' || github.event.inputs.debug_mode == 'true' || github.event.inputs.auto_start == 'true' }}
+        run: |
+          # Restore and configure bash history for VS Code Server
+          touch .vscode-session/.bash_history
+          cp .vscode-session/.bash_history ~/.bash_history
+          echo "export PROMPT_COMMAND='history -a'" >> ~/.bashrc
+          
+          # Generate SSH key for Pinggy
+          mkdir -p ~/.ssh
+          ssh-keygen -t rsa -N "" -f ~/.ssh/id_rsa
+          
+          # Start x11vnc in background
+          x11vnc -display :99 -forever -shared -bg -nopw
+          
+          # Install and find NoVNC
+          sudo apt-get install -y novnc websockify
+          
+          # Start NoVNC using websockify
+          websockify --web /usr/share/novnc 6080 localhost:5900 &
+          
+          # DEBUG: Check profile and set permissions
+          echo "Current directory: $(pwd)"
+          mkdir -p .browser-session
+          chmod -R 700 .browser-session
+          echo "Listing .browser-session content:"
+          ls -la .browser-session
+          
+          # Launch Chrome with ABSOLUTE PATH and logging
+          mkdir -p logs
+          export DISPLAY=:99
+          google-chrome --no-sandbox --disable-dev-shm-usage --disable-gpu --remote-debugging-port=9222 --user-data-dir="$(pwd)/.browser-session" https://x.com > logs/chrome_startup.log 2>&1 &
+          
+          # Launch Control Panel GUI
+          touch $HOME/.Xauthority
+          export DISPLAY=:99
+          DISPLAY=:99 .venv/bin/python scripts/x_posting/vnc_controls.py &
+          
+          # Setup SSH Server
+          sudo mkdir -p /var/run/sshd
+          echo "runner:runner" | sudo chpasswd
+          sudo sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin yes/' /etc/ssh/sshd_config
+          sudo sed -i 's/#PasswordAuthentication yes/PasswordAuthentication yes/' /etc/ssh/sshd_config
+          
+          # Add public key if provided
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          if [ -n "${{ secrets.SSH_PUBLIC_KEY }}" ]; then
+            echo "${{ secrets.SSH_PUBLIC_KEY }}" >> ~/.ssh/authorized_keys
+          else
+            # Fallback to provided key from chat
+            echo "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAACAQDFp7XUs9p/avMSQewbn4XubXf6LdosAmRdH7YEyNxgV5pCjPC7ACzpul4Y0vD7GSdPooAyCeAYiQxIwxhFAufHNLazTSx/uNzttbD3Pk8NK73P6dq9a0SLMJJrm3eQZpiWwU3vqnpDDsP92cWBX4CVfa71GPypS49NPf+vCxf+tFrqVdFyvOi5NQQmZAK7FIoEPzfCO/HMwnMcAOQ984o0Gyna70rE6qM/QopHtMg+Gn1qXcaQyLh7D7ju91VTiEWUQVOXLhI9nDHxdFhYbGkTc84v78VKAUapcTFJ+HiTxcAy0xvK0dqvfb9H8WMsQjB4nX5yjfnYfAQeUPSc08rvlVtYRhXG7rSPqZDtBT+sVzZ0XyZLNR0gh23uqoBnc3DbgWNsAmepjSh0mltGsmisoWmnQyJS5XmZ/v/7cjBeQVU0pLmmDodY2eScEOpbU53XTUg/bg5pjNudGB2cS6eP/1GGBp8DXE3cqxb+06bQGgfv/67yFkg15cjlbqrvwMJrgVRlUT4TMqE4UvbmydNJssik4+qYtZO8U/IVRJteQ5hRfaUJMmeqNTBBE1uucApg/6UGgYIEpIbUkOi7IAousqRHfed7gQNLa6hlvFh+ugvUjoqhFwEZtQ3vnIc28uakfgpWCCV0Wct/Zu7s/QbXZqTi2Mr06iij3Ny4i5vrvQ== workstation@192.168.1.158" >> ~/.ssh/authorized_keys
+          fi
+          chmod 600 ~/.ssh/authorized_keys
+          sudo service ssh start
+
+          # Setup VS Code Web Server
+          curl -fsSL https://code-server.dev/install.sh | sh
+          Xvfb :100 -screen 0 1920x1080x24 &
+          export DISPLAY=:100
+          code-server --auth none --bind-addr 127.0.0.1:8080 --user-data-dir $(pwd)/.vscode-session/data --extensions-dir $(pwd)/.vscode-session/extensions > logs/code_server.log 2>&1 &
+
+          # Setup SSH Tunnel via tmate
+          sudo apt-get install -y tmate
+          tmate -S /tmp/tmate.sock new-session -d
+          tmate -S /tmp/tmate.sock wait tmate-ready
+
+          # Tunnel with Cloudflared (VNC GUI)
+          echo "=========================================================="
+          echo "Please wait for the GUI URL, SSH URL, and VS Code URL..."
+          echo "=========================================================="
+          cloudflared tunnel --url http://127.0.0.1:6080 > vnc_cf.log 2>&1 &
+          
+          # Tunnel with Pinggy (SSH for VS Code)
+          ssh -4 -o StrictHostKeyChecking=no -p 443 -R 0:localhost:22 tcp@a.pinggy.io 2>&1 | tee pinggy_ssh.log &
+          
+          # Tunnel with Cloudflared (VS Code Server Web)
+          cloudflared tunnel --url http://127.0.0.1:8080 > vscode_cf.log 2>&1 &
+          
+          # Wait for URL to appear or timeout
+          TIMEOUT_COUNTER=0
+          while true; do
+            if [ -f vnc_cf.log ] && grep -E -q 'https://[a-zA-Z0-9-]+\.trycloudflare\.com' vnc_cf.log; then
+              if [ -f pinggy_ssh.log ] && grep -E -q 'tcp://[^ ]*\.(pgy\.in|pinggy\.link|pinggy\.io):[0-9]+' pinggy_ssh.log; then
+                if [ -f vscode_cf.log ] && grep -E -q 'https://[a-zA-Z0-9-]+\.trycloudflare\.com' vscode_cf.log; then
+                  break
+                fi
+              fi
+            fi
+            sleep 2
+            TIMEOUT_COUNTER=$((TIMEOUT_COUNTER+1))
+            if [ $TIMEOUT_COUNTER -ge 45 ]; then
+                echo "Timeout waiting for URLs. Continuing with what we have."
+                break
+            fi
+          done
+          
+          URL=$(grep -E -o 'https://[a-zA-Z0-9-]+\.trycloudflare\.com' vnc_cf.log | head -n 1)
+          PINGGY_SSH=$(grep -E -o 'tcp://[^ ]*\.(pgy\.in|pinggy\.link|pinggy\.io):[0-9]+' pinggy_ssh.log | head -n 1)
+          VSCODE_WEB_URL=$(grep -E -o 'https://[a-zA-Z0-9-]+\.trycloudflare\.com' vscode_cf.log | tail -n 1)
+          
+          # Password unused
+          LOCALTUNNEL_PASSWORD="N/A (Using cloudflared without password)"
+          
+          # Transform tcp://url:port to ssh runner@url -p port
+          PINGGY_HOST=$(echo $PINGGY_SSH | sed -E 's|tcp://([^:]+):([0-9]+)|\1|')
+          PINGGY_PORT=$(echo $PINGGY_SSH | sed -E 's|tcp://([^:]+):([0-9]+)|\2|')
+          VSCODE_CMD="ssh runner@$PINGGY_HOST -p $PINGGY_PORT"
+          
+          # Wait for tmate SSH URL
+          TIMEOUT_COUNTER=0
+          SSH_URL=""
+          while [ -z "$SSH_URL" ] && [ $TIMEOUT_COUNTER -lt 15 ]; do
+            SSH_URL=$(tmate -S /tmp/tmate.sock display -p '#{tmate_ssh}' | grep ssh || true)
+            sleep 1
+            TIMEOUT_COUNTER=$((TIMEOUT_COUNTER+1))
+          done
+          
+          echo "=========================================================="
+          echo "GUI URL: $URL/vnc.html?host=$(echo $URL | sed 's|https://||')&port=443"
+          echo "VS Code Web URL: $VSCODE_WEB_URL/?folder=$(pwd)"
+          echo "Tunnel Password: $LOCALTUNNEL_PASSWORD"
+          echo "VS Code SSH CMD: $VSCODE_CMD"
+          echo "Tmate SSH CMD: $SSH_URL"
+          echo "=========================================================="
+          echo "interactive session started... Use the GUI buttons or SSH."
+          echo "=========================================================="
+
+          # Automatically commit the connection info so the user can retrieve it without a browser
+          echo "VSCODE_WEB_URL: $VSCODE_WEB_URL/?folder=$(pwd)" > ssh_connection.txt
+          echo "TUNNEL_PASSWORD: $LOCALTUNNEL_PASSWORD" >> ssh_connection.txt
+          echo "VSCODE_SSH_CMD: $VSCODE_CMD" >> ssh_connection.txt
+          echo "TMATE_SSH_CMD: $SSH_URL" >> ssh_connection.txt
+          echo "GUI_URL: $URL/vnc.html?host=$(echo $URL | sed 's|https://||')&port=443" >> ssh_connection.txt
+          echo "USERNAME: runner" >> ssh_connection.txt
+          echo "PASSWORD: runner" >> ssh_connection.txt
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add ssh_connection.txt
+          git commit -m "Update SSH connection details [skip ci]" || true
+          git push origin HEAD:main || true
+
+          export DISPLAY=:99
+          
+          # Handle Auto-Start and Schedules
+          AUTO_START="${{ github.event.inputs.auto_start }}"
+          POST_TYPE="${{ github.event.inputs.post_type }}"
+          
+          # If triggered by a schedule, set auto-start and alternate between products and story
+          if [[ "${{ github.event_name }}" == "schedule" ]]; then
+              AUTO_START="true"
+              CURRENT_HOUR=$(date +%H)
+              # Run products on even hours, story on odd hours
+              if [ $((CURRENT_HOUR % 2)) -eq 0 ]; then
+                  POST_TYPE="products"
+              else
+                  POST_TYPE="story"
+              fi
+              echo "Scheduled Run for hour $CURRENT_HOUR. Selected: $POST_TYPE"
+          fi
+          
+          if [ "$AUTO_START" == "true" ]; then
+             echo "Auto-starting posting script for $POST_TYPE..."
+             touch /tmp/auto_start_flag
+             if [ "$POST_TYPE" == "story" ]; then
+                touch /tmp/run_story
+             else
+                touch /tmp/run_products
+             fi
+          fi
+          
+          # Main Event Loop
+          while true; do
+            if [ -f /tmp/save ]; then
+                echo "Save & Exit signal received."
+                break
+            fi
+            
+            SCRIPT_TO_RUN=""
+            
+            if [ -f /tmp/run_products ]; then
+                echo "Signal: Run Products"
+                SCRIPT_TO_RUN="autogui/x_com/auto_post_products_s.py --all"
+                rm /tmp/run_products
+            elif [ -f /tmp/run_story ]; then
+                echo "Signal: Run Story"
+                SCRIPT_TO_RUN="autogui/x_com/auto_post_story.py"
+                rm /tmp/run_story
+            elif [ -f /tmp/load_chrome ]; then
+                echo "Signal: Reload Chrome"
+                pkill google-chrome || true
+                rm -f logs/chrome_startup.log
+                export DISPLAY=:99
+                google-chrome --no-sandbox --disable-dev-shm-usage --disable-gpu --remote-debugging-port=9222 --user-data-dir="$(pwd)/.browser-session" https://x.com > logs/chrome_startup.log 2>&1 &
+                rm /tmp/load_chrome
+            elif [ -f /tmp/reset_cache ]; then
+                echo "Signal: Reset Chrome Cache"
+                pkill google-chrome || true
+                rm -rf .browser-session/*
+                rm -f logs/chrome_startup.log
+                export DISPLAY=:99
+                google-chrome --no-sandbox --disable-dev-shm-usage --disable-gpu --remote-debugging-port=9222 --user-data-dir="$(pwd)/.browser-session" https://x.com > logs/chrome_startup.log 2>&1 &
+                rm /tmp/reset_cache
+            elif [ -f /tmp/restart_vscode ]; then
+                echo "Signal: Restart VS Code and Tunnels" >> logs/x_post.log
+                
+                # Ensure tools are killed
+                pkill -f "code-server" || true
+                pkill -f "cloudflared tunnel --url http://127.0.0.1:8080" || true
+                pkill -f "tcp@a.pinggy.io" || true
+                
+                rm -f logs/code_server.log
+                rm -f vscode_cf.log
+                rm -f pinggy_ssh.log
+                
+                export DISPLAY=:100
+                code-server --auth none --bind-addr 127.0.0.1:8080 --user-data-dir $(pwd)/.vscode-session/data --extensions-dir $(pwd)/.vscode-session/extensions > logs/code_server.log 2>&1 &
+                ssh -4 -o StrictHostKeyChecking=no -p 443 -R 0:localhost:22 tcp@a.pinggy.io 2>&1 | tee pinggy_ssh.log &
+                cloudflared tunnel --url http://127.0.0.1:8080 > vscode_cf.log 2>&1 &
+                
+                rm /tmp/restart_vscode
+                
+                # Wait for URLs
+                echo "Waiting for new VS Code URLs..." >> logs/x_post.log
+                TIMEOUT_COUNTER=0
+                while true; do
+                    if [ -f pinggy_ssh.log ] && grep -E -q 'tcp://[^ ]*\.(pgy\.in|pinggy\.link|pinggy\.io):[0-9]+' pinggy_ssh.log; then
+                        if [ -f vscode_cf.log ] && grep -E -q 'https://[a-zA-Z0-9-]+\.trycloudflare\.com' vscode_cf.log; then
+                            break
+                        fi
+                    fi
+                    sleep 2
+                    TIMEOUT_COUNTER=$((TIMEOUT_COUNTER+1))
+                    if [ $TIMEOUT_COUNTER -ge 15 ]; then
+                        echo "Timeout waiting for new URLs." >> logs/x_post.log
+                        break
+                    fi
+                done
+                
+                NEW_PINGGY=$(grep -E -o 'tcp://[^ ]*\.(pgy\.in|pinggy\.link|pinggy\.io):[0-9]+' pinggy_ssh.log | head -n 1 || true)
+                NEW_CODE=$(grep -E -o 'https://[a-zA-Z0-9-]+\.trycloudflare\.com' vscode_cf.log | tail -n 1 || true)
+                
+                echo "==========================================================" >> logs/x_post.log
+                echo "NEW VS Code Web URL: $NEW_CODE/?folder=$(pwd)" >> logs/x_post.log
+                if [ -n "$NEW_PINGGY" ]; then
+                    PINGGY_HOST=$(echo $NEW_PINGGY | sed -E 's|tcp://([^:]+):([0-9]+)|\1|')
+                    PINGGY_PORT=$(echo $NEW_PINGGY | sed -E 's|tcp://([^:]+):([0-9]+)|\2|')
+                    echo "NEW VS Code SSH CMD: ssh runner@$PINGGY_HOST -p $PINGGY_PORT" >> logs/x_post.log
+                fi
+                echo "==========================================================" >> logs/x_post.log
+            elif [ -f /tmp/continue ]; then
+                 # Legacy support
+                 if [ "${{ github.event.inputs.post_type }}" == "story" ]; then
+                    SCRIPT_TO_RUN="autogui/x_com/auto_post_story_s.py"
+                 else
+                    SCRIPT_TO_RUN="autogui/x_com/auto_post_products_s.py --all"
+                 fi
+                 rm /tmp/continue
+            fi
+            
+            if [ -n "$SCRIPT_TO_RUN" ]; then
+                echo "--- Executing: $SCRIPT_TO_RUN ---"
+                
+                # Hot Reload: Pull latest code
+                echo "Pulling latest code..."
+                git pull origin main || echo "Git pull failed, continuing with current code..."
+                
+                # Ensure environment is ready
+                mkdir -p logs screenshots
+                touch $HOME/.Xauthority
+                
+                # Execute Python Script
+                export DISPLAY=:99
+                set +e # Disable exit on error for the script execution so loop continues
+                DISPLAY=:99 .venv/bin/python $SCRIPT_TO_RUN 2>&1 | tee -a logs/x_post.log
+                EXIT_CODE=$?
+                set -e # Re-enable exit on error
+                
+                echo "--- Script finished with exit code $EXIT_CODE ---"
+                
+                # Capture screenshot after run
+                scrot screenshots/run_$(date +%s).png
+                
+                # Break loop immediately if this was an auto-started run to save runner time
+                if [ -f /tmp/auto_start_flag ]; then
+                    echo "Auto-Start Run Completed. Exiting loop to shut down runner and save time..."
+                    break
+                fi
+                
+                echo "Waiting for next command..."
+            fi
+            
+            sleep 2
+          done
+          
+          # Cleanup after loop break
+          echo "Exiting interactive loop..."
+      - name: Cleanup Manual Session
+        if: always()
+        run: |
+          echo "Saving VS Code bash terminal history..."
+          cp ~/.bash_history .vscode-session/.bash_history || true
+          
+          echo "Cleaning up all background processes to release runner..."
+          pkill google-chrome || true
+          pkill x11vnc || true
+          pkill websockify || true
+          pkill cloudflared || true
+          pkill -f code-server || true
+          pkill -f tmate || true
+          pkill -f pinggy || true
+          mkdir -p logs screenshots
+          sleep 2
+
+      - name: Commit and Push History
+        if: ${{ env.RUN_SCRIPT != 'false' }}
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add posted_products.json
+          if git diff --staged --quiet; then
+            echo "No changes to commit."
+          else
+            git commit -m "Update posted products history [skip ci]"
+            git push
+          fi
+      
+      - name: Upload Artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: x-post-results-${{ github.run_id }}
+          path: |
+            logs/
+            screenshots/
+            .browser-session/
+            .vscode-session/
+      
+      - name: Save browser session
+        if: always()
+        uses: actions/cache/save@v3
+        with:
+          path: .browser-session
+          key: x-browser-session-${{ runner.os }}-${{ github.run_id }}
+
+      - name: Save VS Code session
+        if: always()
+        uses: actions/cache/save@v3
+        with:
+          path: .vscode-session
+          key: vscode-session-${{ runner.os }}-${{ github.run_id }}
