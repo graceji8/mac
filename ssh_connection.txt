@@ -1,6 +1,6 @@
-VSCODE_WEB_URL: https://america-legislation-heroes-bend.trycloudflare.com/?folder=/Users/runner/work/mac/mac
+VSCODE_WEB_URL: https://gates-gdp-breach-grab.trycloudflare.com/?folder=/Users/runner/work/mac/mac
 VNC_PASSWORD: runner
-VSCODE_SSH_CMD: ssh runner@tfxoq-13-105-117-227.a.free.pinggy.link -p 40147
-SSH_PASSWORD: runner
-TMATE_SSH_CMD: ssh HyBKRsUN7NEPRAFwZQnukCAsG@nyc1.tmate.io
-GUI_URL: https://acceptance-contract-already-vii.trycloudflare.com/vnc.html?host=acceptance-contract-already-vii.trycloudflare.com&port=443&autoconnect=true&password=runner
+VNC_VIEWER_ADDRESS: tcp://mvesp-13-105-117-195.a.free.pinggy.link:45959
+VSCODE_SSH_CMD: ssh runner@vckko-13-105-117-195.a.free.pinggy.link -p 42633
+TMATE_SSH_CMD: ssh TRvL2TTnFSfxjTrwwuw58bjn7@nyc1.tmate.io
+GUI_URL: https://frozen-aka-economies-robert.trycloudflare.com/vnc.html?host=frozen-aka-economies-robert.trycloudflare.com&port=443&autoconnect=true&password=runner
