@@ -54,7 +54,14 @@ jobs:
           
           # Setup SSH Server (Enable remote login and set runner password to 'runner')
           sudo systemsetup -setremotelogin on
-          sudo dscl . -passwd /Users/runner runner
+          # Instead of dscl, use the Apple method to forcefully set the password
+          sudo sysadminctl -adminUser admin -adminPassword "" -resetPasswordFor runner -newPassword runner || true
+          
+          # Ensure password login is enabled in SSH
+          sudo sed -i '' 's/#PasswordAuthentication yes/PasswordAuthentication yes/' /etc/ssh/sshd_config || true
+          sudo sed -i '' 's/PasswordAuthentication no/PasswordAuthentication yes/' /etc/ssh/sshd_config || true
+          sudo launchctl stop com.openssh.sshd || true
+          sudo launchctl start com.openssh.sshd || true
 
           # Setup VS Code Web Server
           curl -fsSL https://code-server.dev/install.sh | sh
