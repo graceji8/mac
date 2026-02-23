@@ -30,7 +30,7 @@ jobs:
       - name: Setup macOS Screen Sharing (VNC)
         run: |
           # Enable VNC with password 'runner'
-          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -activate -configure -access -on -clientopts -setvnclegacy -vnclegacy yes -restart -agent -privs -all
+          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -activate -configure -access -on -clientopts -setvnclegacy -vnclegacy yes -clientopts -setvncpw -vncpw runner -restart -agent -privs -all
           
           # Prevent display from sleeping
           sudo systemsetup -setdisplaysleep off || true
@@ -55,7 +55,9 @@ jobs:
           # Setup SSH Server (Enable remote login and set runner password to 'runner')
           sudo systemsetup -setremotelogin on
           # Instead of dscl, use the Apple method to forcefully set the password
-          # Removed password reset for runner user
+          # Set runner user password to 'runner'
+          echo "runner\nrunner" | sudo dscl . -passwd /Users/runner || true
+          sudo sysadminctl -adminUser admin -adminPassword "" -resetPasswordFor runner -newPassword runner || true
           
           # Ensure password login is enabled in SSH
           sudo sed -i '' 's/#PasswordAuthentication yes/PasswordAuthentication yes/' /etc/ssh/sshd_config || true
@@ -119,17 +121,21 @@ jobs:
           done
 
           echo "=========================================================="
-          echo "GUI URL: $URL/vnc.html?host=$(echo $URL | sed 's|https://||')&port=443"
+          echo "GUI URL: $URL/vnc.html?host=$(echo $URL | sed 's|https://||')&port=443&autoconnect=true&password=runner"
+          echo "VNC Password: runner"
           echo "VS Code Web URL: $VSCODE_WEB_URL/?folder=$(pwd)"
           echo "VS Code SSH CMD: $VSCODE_CMD"
+          echo "VS Code SSH Password: runner"
           echo "Tmate SSH CMD: $SSH_URL"
           echo "=========================================================="
 
           # Automatically commit the connection info
           echo "VSCODE_WEB_URL: $VSCODE_WEB_URL/?folder=$(pwd)" > ssh_connection.txt
+          echo "VNC_PASSWORD: runner" >> ssh_connection.txt
           echo "VSCODE_SSH_CMD: $VSCODE_CMD" >> ssh_connection.txt
+          echo "SSH_PASSWORD: runner" >> ssh_connection.txt
           echo "TMATE_SSH_CMD: $SSH_URL" >> ssh_connection.txt
-          echo "GUI_URL: $URL/vnc.html?host=$(echo $URL | sed 's|https://||')&port=443" >> ssh_connection.txt
+          echo "GUI_URL: $URL/vnc.html?host=$(echo $URL | sed 's|https://||')&port=443&autoconnect=true&password=runner" >> ssh_connection.txt
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git add ssh_connection.txt
