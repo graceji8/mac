@@ -1,6 +1,4 @@
-VSCODE_WEB_URL: https://then-releases-permanent-indoor.trycloudflare.com/?folder=/Users/runner/work/mac/mac
-VNC_PASSWORD: runner
-VSCODE_SSH_CMD: ssh runner@qbozx-13-105-117-182.a.free.pinggy.link -p 46857
-SSH_PASSWORD: runner
-TMATE_SSH_CMD: ssh Bjy4F42U8BPWkFFYPECrXdvHf@sfo2.tmate.io
-GUI_URL: https://shaw-atmosphere-solo-principle.trycloudflare.com/vnc.html?host=shaw-atmosphere-solo-principle.trycloudflare.com&port=443
+VSCODE_WEB_URL: https://necessary-parent-finite-bolt.trycloudflare.com/?folder=/Users/runner/work/mac/mac
+VSCODE_SSH_CMD: ssh runner@fxtbd-13-105-117-117.a.free.pinggy.link -p 34069
+TMATE_SSH_CMD: ssh MVc3KzBvHCGs95DsyhbKhN87R@sfo2.tmate.io
+GUI_URL: https://singing-massachusetts-outcome-count.trycloudflare.com/vnc.html?host=singing-massachusetts-outcome-count.trycloudflare.com&port=443
