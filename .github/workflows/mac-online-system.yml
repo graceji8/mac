@@ -29,8 +29,10 @@ jobs:
 
       - name: Setup macOS Screen Sharing (VNC)
         run: |
-          # Enable VNC with password 'runner'
-          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -activate -configure -access -on -clientopts -setvnclegacy -vnclegacy yes -clientopts -setvncpw -vncpw runner -restart -agent -privs -all
+          # Enable VNC with robust configuration
+          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -activate -configure -access -on -clientopts -setvnclegacy -vnclegacy yes -restart -agent -privs -all
+          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -configure -clientopts -setvncpw -vncpw runner
+          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -restart -agent
           
           # Prevent display from sleeping
           sudo systemsetup -setdisplaysleep off || true
@@ -52,11 +54,10 @@ jobs:
           # Start NoVNC proxy (VNC is on 5900, NoVNC will listen on 6080)
           ./noVNC/utils/novnc_proxy --vnc localhost:5900 --listen 6080 > logs/websockify.log 2>&1 &
           
-          # Setup SSH Server (Enable remote login and set runner password to 'runner')
+          # Setup SSH Server and set runner password to 'runner'
           sudo systemsetup -setremotelogin on
-          # Instead of dscl, use the Apple method to forcefully set the password
-          # Set runner user password to 'runner'
-          echo "runner\nrunner" | sudo dscl . -passwd /Users/runner || true
+          # Set password via multiple methods to ensure reliability
+          sudo dscl . -passwd /Users/runner runner || true
           sudo sysadminctl -adminUser admin -adminPassword "" -resetPasswordFor runner -newPassword runner || true
           
           # Ensure password login is enabled in SSH
