@@ -1,6 +1,6 @@
-VSCODE_WEB_URL: https://worker-dairy-hourly-informal.trycloudflare.com/?folder=/Users/runner/work/mac/mac
+VSCODE_WEB_URL: https://plugins-choosing-include-worked.trycloudflare.com/?folder=/Users/runner/work/mac/mac
 VNC_PASSWORD: runner
-VSCODE_SSH_CMD: ssh runner@jdwvl-13-105-117-185.a.free.pinggy.link -p 43575
+VSCODE_SSH_CMD: ssh runner@yombn-13-105-117-138.a.free.pinggy.link -p 33645
 SSH_PASSWORD: runner
-TMATE_SSH_CMD: ssh HnjvTs8Gj9LU8NLDT5dGnYRUH@sfo2.tmate.io
-GUI_URL: https://woods-cms-department-interest.trycloudflare.com/vnc.html?host=woods-cms-department-interest.trycloudflare.com&port=443&autoconnect=true&password=runner
+TMATE_SSH_CMD: ssh qAWZULHq7EDxhgC9fem3jTFax@sfo2.tmate.io
+GUI_URL: https://med-preferred-three-evaluating.trycloudflare.com/vnc.html?host=med-preferred-three-evaluating.trycloudflare.com&port=443&autoconnect=true&password=runner
