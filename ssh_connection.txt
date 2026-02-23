@@ -1,4 +1,6 @@
-VSCODE_WEB_URL: https://necessary-parent-finite-bolt.trycloudflare.com/?folder=/Users/runner/work/mac/mac
-VSCODE_SSH_CMD: ssh runner@fxtbd-13-105-117-117.a.free.pinggy.link -p 34069
-TMATE_SSH_CMD: ssh MVc3KzBvHCGs95DsyhbKhN87R@sfo2.tmate.io
-GUI_URL: https://singing-massachusetts-outcome-count.trycloudflare.com/vnc.html?host=singing-massachusetts-outcome-count.trycloudflare.com&port=443
+VSCODE_WEB_URL: https://worker-dairy-hourly-informal.trycloudflare.com/?folder=/Users/runner/work/mac/mac
+VNC_PASSWORD: runner
+VSCODE_SSH_CMD: ssh runner@jdwvl-13-105-117-185.a.free.pinggy.link -p 43575
+SSH_PASSWORD: runner
+TMATE_SSH_CMD: ssh HnjvTs8Gj9LU8NLDT5dGnYRUH@sfo2.tmate.io
+GUI_URL: https://woods-cms-department-interest.trycloudflare.com/vnc.html?host=woods-cms-department-interest.trycloudflare.com&port=443&autoconnect=true&password=runner
