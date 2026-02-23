@@ -56,9 +56,9 @@ jobs:
           
           # Setup SSH Server and set runner password to 'runner'
           sudo systemsetup -setremotelogin on
-          # Set password via multiple methods to ensure reliability
-          sudo dscl . -passwd /Users/runner runner || true
-          sudo sysadminctl -adminUser admin -adminPassword "" -resetPasswordFor runner -newPassword runner || true
+          # Note: System password reset for 'runner' is not possible on macOS runners without Secure Token. 
+          # We rely on VNC-specific password and passwordless VS Code server.
+
           
           # Ensure password login is enabled in SSH
           sudo sed -i '' 's/#PasswordAuthentication yes/PasswordAuthentication yes/' /etc/ssh/sshd_config || true
@@ -110,7 +110,8 @@ jobs:
           
           PINGGY_HOST=$(echo $PINGGY_SSH | sed -E 's|tcp://([^:]+):([0-9]+)|\1|')
           PINGGY_PORT=$(echo $PINGGY_SSH | sed -E 's|tcp://([^:]+):([0-9]+)|\2|')
-          VSCODE_CMD="ssh runner@$PINGGY_HOST -p $PINGGY_PORT"
+          VSCODE_CMD="ssh runner@$PINGGY_HOST -p $PINGGY_PORT" # Note: Password will be unknown/random
+
           
           # Wait for tmate SSH URL
           TIMEOUT_COUNTER=0
