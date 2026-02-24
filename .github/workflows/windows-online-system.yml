@@ -72,8 +72,8 @@ jobs:
           # Start NoMachine is already handled by service.
           
           # Setup SSH Tunnel via Pinggy (SSH)
-          # Use -tt to force pseudo-terminal for Pinggy banner output
-          Start-Process ssh -ArgumentList "-4", "-tt", "-o", "StrictHostKeyChecking=no", "-p", "443", "-R", "0:localhost:22", "tcp@a.pinggy.io" -RedirectStandardOutput "logs/pinggy_ssh.log" -NoNewWindow
+          # SSH outputs banner/URLs to stderr - must redirect stderr to the log
+          Start-Process ssh -ArgumentList "-4", "-tt", "-o", "StrictHostKeyChecking=no", "-p", "443", "-R", "0:localhost:22", "tcp@a.pinggy.io" -RedirectStandardError "logs/pinggy_ssh.log" -RedirectStandardOutput "logs/pinggy_ssh_out.log" -NoNewWindow
 
           # Wait for URLs to appear
           Write-Host "Waiting for tunnel URLs..."
@@ -92,8 +92,10 @@ jobs:
           }
 
           # Debug: Show the log content if the match might be failing
-          Write-Host "--- Debug: Tunnel Log Content ---"
-          if (Test-Path "logs/pinggy_ssh.log") { Get-Content "logs/pinggy_ssh.log" } else { Write-Host "Log file not found." }
+          Write-Host "--- Debug: Tunnel STDERR Log ---"
+          if (Test-Path "logs/pinggy_ssh.log") { Get-Content "logs/pinggy_ssh.log" } else { Write-Host "stderr log not found." }
+          Write-Host "--- Debug: Tunnel STDOUT Log ---"
+          if (Test-Path "logs/pinggy_ssh_out.log") { Get-Content "logs/pinggy_ssh_out.log" } else { Write-Host "stdout log not found." }
           Write-Host "--------------------------------"
 
           $PINGGY_SSH = Select-String -Path "logs/pinggy_ssh.log" -Pattern "(tcp://|ssh -p [0-9]+ runner@)[^ ]*\.(pgy\.in|pinggy\.link|pinggy\.io)(:[0-9]+)?" | ForEach-Object { $_.Matches.Value } | Select-Object -First 1
