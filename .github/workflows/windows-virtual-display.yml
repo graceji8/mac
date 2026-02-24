@@ -35,7 +35,7 @@ jobs:
             -Name "UserAuthentication" -Value 0 -ErrorAction SilentlyContinue
 
           # Set password and show errors if any
-          $pass = if ($env:SESSION_PASSWORD) { $env:SESSION_PASSWORD } else { "RunnerAdmin!123" }
+          $pass = if ($env:SESSION_PASSWORD) { $env:SESSION_PASSWORD } else { "Admin@Runner_2026_Complex!" }
           $user = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name.Split('\')[1]
           Write-Host "Setting password for user: $user"
           net user $user $pass
@@ -130,7 +130,7 @@ jobs:
           $rdpAddr = Select-String -Path "$env:TEMP\pinggy_rdp.log" -Pattern "tcp://[^ ]*\.(pgy\.in|pinggy\.link|pinggy\.io):[0-9]+" | ForEach-Object { $_.Matches.Value } | Select-Object -First 1
           
           $user = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name.Split('\')[1]
-          $pass = if ($env:SESSION_PASSWORD) { $env:SESSION_PASSWORD } else { "RunnerAdmin123!" }
+          $pass = if ($env:SESSION_PASSWORD) { $env:SESSION_PASSWORD } else { "Admin@Runner_2026_Complex!" }
 
           Write-Host "========================================================"
           Write-Host "  RDP (Direct):      $rdpAddr"
