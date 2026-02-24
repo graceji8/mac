@@ -49,33 +49,44 @@ jobs:
         shell: pwsh
         run: |
           Write-Host "Installing TigerVNC via winget..."
+          winget show TigerVNC.TigerVNC
           winget install TigerVNC.TigerVNC --accept-source-agreements --accept-package-agreements
           
-          # Dynamic discovery of the executable across common paths
+          Write-Host "Verifying installation with winget list..."
+          winget list TigerVNC.TigerVNC
+
+          # Dynamic discovery across exhaustive paths
           $searchPaths = @(
-              "C:\Program Files\TigerVNC",
-              "C:\Program Files (x86)\TigerVNC",
+              "$env:ProgramFiles\TigerVNC",
+              "${env:ProgramFiles(x86)}\TigerVNC",
+              "$env:LOCALAPPDATA\TigerVNC",
+              "$env:APPDATA\TigerVNC",
               "C:\vnc"
           )
           
           $vncExe = $null
           foreach ($path in $searchPaths) {
               if (Test-Path $path) {
+                  Write-Host "Checking path: $path"
                   $vncExe = Get-ChildItem -Path $path -Filter "winvnc*.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName -First 1
                   if ($vncExe) { break }
               }
           }
 
-          # Fallback: search the entire C: drive if still not found (slower)
+          # Aggressive fallback search
           if (-not $vncExe) {
-              Write-Host "TigerVNC not found in common paths. Searching C:\... (this may take a moment)"
-              $vncExe = Get-ChildItem -Path "C:\" -Filter "winvnc.exe" -Recurse -Depth 4 -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName -First 1
+              Write-Host "TigerVNC not found in common paths. Running exhaustive search on C:\..."
+              $vncExe = Get-ChildItem -Path "C:\" -Filter "winvnc.exe" -Recurse -Depth 5 -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName -First 1
           }
 
           if (-not $vncExe) {
-              Write-Error "TigerVNC executable not found after installation. Listing available program directories:"
-              ls "C:\Program Files" -ErrorAction SilentlyContinue
-              ls "C:\Program Files (x86)" -ErrorAction SilentlyContinue
+              Write-Error "TigerVNC executable not found after installation. Listing available program directories for debugging:"
+              Write-Host "--- C:\Program Files ---"
+              ls "C:\Program Files" -ErrorAction SilentlyContinue | Select-Object Name
+              Write-Host "--- C:\Program Files (x86) ---"
+              ls "C:\Program Files (x86)" -ErrorAction SilentlyContinue | Select-Object Name
+              Write-Host "--- LocalAppData ---"
+              ls $env:LOCALAPPDATA -ErrorAction SilentlyContinue | Select-Object Name
               throw "TigerVNC installation verification failed"
           }
           Write-Host "TigerVNC found at: $vncExe"
