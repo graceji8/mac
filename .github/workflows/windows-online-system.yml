@@ -73,9 +73,6 @@ jobs:
           
           # Setup SSH Tunnel via Pinggy (SSH)
           Start-Process ssh -ArgumentList "-4", "-o", "StrictHostKeyChecking=no", "-p", "443", "-R", "0:localhost:22", "tcp@a.pinggy.io" -RedirectStandardOutput "logs/pinggy_ssh.log" -NoNewWindow
-          
-          # Setup SSH Tunnel via Pinggy (NoMachine - Default port 4000)
-          Start-Process ssh -ArgumentList "-4", "-o", "StrictHostKeyChecking=no", "-p", "443", "-R", "0:localhost:4000", "tcp@a.pinggy.io" -RedirectStandardOutput "logs/pinggy_nx.log" -NoNewWindow
 
           # Wait for URLs to appear
           Write-Host "Waiting for tunnel URLs..."
@@ -93,18 +90,15 @@ jobs:
           }
 
           $PINGGY_SSH = Select-String -Path "logs/pinggy_ssh.log" -Pattern "tcp://[^ ]*\.(pgy\.in|pinggy\.link|pinggy\.io):[0-9]+" | ForEach-Object { $_.Matches.Value } | Select-Object -First 1
-          $PINGGY_NX = Select-String -Path "logs/pinggy_nx.log" -Pattern "tcp://[^ ]*\.(pgy\.in|pinggy\.link|pinggy\.io):[0-9]+" | ForEach-Object { $_.Matches.Value } | Select-Object -First 1
 
           Write-Host "=========================================================="
           Write-Host "SSH Address: $PINGGY_SSH"
-          Write-Host "NoMachine Address: $PINGGY_NX"
           Write-Host "Username: runneradmin"
           Write-Host "Password: RunnerAdmin123!"
           Write-Host "=========================================================="
 
           # Save connection info
           "SSH_ADDRESS: $PINGGY_SSH`n" +
-          "NOMACHINE_ADDRESS: $PINGGY_NX`n" +
           "USERNAME: runneradmin`n" +
           "PASSWORD: RunnerAdmin123!" | Out-File -FilePath "ssh_connection.txt"
 
@@ -119,7 +113,7 @@ jobs:
         run: |
           Write-Host "Entering interactive session. Create a file named 'C:\save' or 'C:\continue' to stop."
           while ($true) {
-              if (Test-Path "C:\save" -Or Test-Path "C:\continue") {
+              if ((Test-Path "C:\save") -or (Test-Path "C:\continue")) {
                   Write-Host "Exit signal received. Terminating interactive session."
                   break
               }

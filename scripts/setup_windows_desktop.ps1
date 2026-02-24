@@ -60,17 +60,7 @@ else {
 # 2. Configure Resolution (Optional, driver usually defaults to 1080p)
 Write-Host "Virtual display should be active. Defaulting to 1920x1080."
 
-# 3. Install NoMachine (Optional)
-Write-Host "Attempting to install NoMachine (optional)..."
-try {
-    winget install --id NoMachine.NoMachine --exact --accept-package-agreements --accept-source-agreements --silent
-    Write-Host "NoMachine installation successful."
-}
-catch {
-    Write-Host "NoMachine installation failed. Continuing since other remotes might work."
-}
-
-# 4. Setup OpenSSH Server
+# 3. Setup OpenSSH Server
 Write-Host "Configuring OpenSSH Server..."
 try {
     Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0
