@@ -52,14 +52,22 @@ jobs:
           if (-not (Test-Path $vncDir)) { New-Item -ItemType Directory -Path $vncDir | Out-Null }
           
           # Download standalone WinVNC from SourceForge using curl (more reliable for redirects)
-          $vncUrl = "https://downloads.sourceforge.net/project/tigervnc/stable/1.13.1/winvnc-x64-1.13.1.exe"
+          # Adding /download suffix to force direct binary download
+          $vncUrl = "https://downloads.sourceforge.net/project/tigervnc/stable/1.13.1/winvnc-x64-1.13.1.exe/download"
           Write-Host "Downloading TigerVNC from SourceForge: $vncUrl"
           curl.exe -L -o "$vncDir\winvnc.exe" $vncUrl
           
           if (-not (Test-Path "$vncDir\winvnc.exe")) { throw "TigerVNC download failed" }
           $size = (Get-Item "$vncDir\winvnc.exe").Length
           Write-Host "Downloaded file size: $size bytes"
-          if ($size -lt 1000000) { throw "Downloaded file is too small ($size bytes), likely an error page." }
+          
+          # Verify file is a valid Windows executable (starts with 'MZ')
+          $header = [System.BitConverter]::ToString([System.IO.File]::ReadAllBytes("$vncDir\winvnc.exe")[0..1])
+          if ($header -ne "4D-5A") { 
+              Write-Error "Invalid executable header: $header (Expected 4D-5A / MZ). Likely an HTML page."
+              throw "Corrupted TigerVNC download"
+          }
+          if ($size -lt 1000000) { throw "Downloaded file is suspiciously small ($size bytes)." }
 
           # Configure via Registry
           $vncPass = if ($env:VNC_PASSWORD) { $env:VNC_PASSWORD } else { "vnc12345" }
