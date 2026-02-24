@@ -1,4 +1,4 @@
-name: Windows Remote Dev (noVNC + VS Code Server)
+name: Windows Remote Dev (RDP + VNC + Code Server)
 
 on:
   workflow_dispatch:
@@ -12,12 +12,14 @@ jobs:
   remote-desktop:
     runs-on: windows-latest
     timeout-minutes: 355
+    permissions:
+      contents: write
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # ── 1. Enable RDP so TigerVNC can mirror the desktop session ──────────
+      # ── 1. Enable RDP & Set Password ────────────────────────────────────────
       - name: Enable Remote Desktop
         shell: pwsh
         run: |
@@ -25,187 +27,132 @@ jobs:
             -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' `
             -Name "fDenyTSConnections" -Value 0
           Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+          Set-ItemProperty `
+            -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
+            -Name "UserAuthentication" -Value 0
 
-          # Set a password on the runner user account
-          $pass = if ($env:SESSION_PASSWORD) { $env:SESSION_PASSWORD } else { "Actions2024!" }
+          $pass = if ($env:SESSION_PASSWORD) { $env:SESSION_PASSWORD } else { "RunnerAdmin123!" }
           $user = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name.Split('\')[1]
           net user $user $pass 2>&1 | Out-Null
-          Write-Host "RDP enabled, user: $user"
+          Write-Host "RDP enabled. User: $user"
         env:
           SESSION_PASSWORD: ${{ secrets.SESSION_PASSWORD }}
 
-      # ── 2. Install TigerVNC WinVNC Server ───────────────────────────────────
+      # ── 2. Install TigerVNC & noVNC ─────────────────────────────────────────
       - name: Install TigerVNC Server
         shell: pwsh
         run: |
           $ProgressPreference = 'SilentlyContinue'
-          # Dynamically fetch the latest release URL from GitHub API
           $release = Invoke-RestMethod -Uri "https://api.github.com/repos/TigerVNC/tigervnc/releases/latest"
           $asset = $release.assets | Where-Object { $_.name -match "winvnc.*\.exe$" } | Select-Object -First 1
-          if (!$asset) {
-              Write-Warning "winvnc asset not found in latest release, trying fixed version..."
-              $asset = $release.assets | Where-Object { $_.name -match "tigervnc.*\.exe$" } | Select-Object -First 1
-          }
+          if (!$asset) { $asset = $release.assets | Where-Object { $_.name -match "tigervnc.*\.exe$" } | Select-Object -First 1 }
           if ($asset) {
-              Write-Host "Downloading: $($asset.browser_download_url)"
               Invoke-WebRequest -Uri $asset.browser_download_url -OutFile "$env:TEMP\winvnc.exe"
               Start-Process "$env:TEMP\winvnc.exe" -ArgumentList "/silent" -Wait
-              Write-Host "TigerVNC WinVNC installed"
-          } else {
-              Write-Warning "Could not find TigerVNC WinVNC asset. Available assets:"
-              $release.assets | ForEach-Object { Write-Host "  - $($_.name)" }
-              throw "TigerVNC WinVNC not found in latest release"
           }
 
-      # ── 3. Configure TigerVNC via registry ────────────────────────────────
-      - name: Configure & start TigerVNC
+      - name: Configure & Start TigerVNC
         shell: pwsh
         run: |
           $vncPass = if ($env:VNC_PASSWORD) { $env:VNC_PASSWORD } else { "vnc12345" }
-
           $reg = "HKLM:\SOFTWARE\TigerVNC\WinVNC4"
           if (-not (Test-Path $reg)) { New-Item -Path $reg -Force | Out-Null }
-
-          # Encrypt password with vncpasswd.exe
-          $passFile  = "$env:TEMP\vncpasswd.bin"
+          $passFile = "$env:TEMP\vncpasswd.bin"
           $vncpasswd = "C:\Program Files\TigerVNC\vncpasswd.exe"
           if (Test-Path $vncpasswd) {
             $vncPass | & $vncpasswd -f | Set-Content $passFile -Encoding Byte
-            Set-ItemProperty -Path $reg -Name "Password" `
-              -Value ([System.IO.File]::ReadAllBytes($passFile))
+            Set-ItemProperty -Path $reg -Name "Password" -Value ([System.IO.File]::ReadAllBytes($passFile))
           }
-
-          Set-ItemProperty -Path $reg -Name "SecurityTypes"     -Value "VncAuth"
-          Set-ItemProperty -Path $reg -Name "AlwaysShared"      -Value 1  -Type DWord
-          Set-ItemProperty -Path $reg -Name "DisconnectClients" -Value 0  -Type DWord
-          Set-ItemProperty -Path $reg -Name "LocalHost"         -Value 0  -Type DWord
-
-          # Start WinVNC
+          Set-ItemProperty -Path $reg -Name "SecurityTypes" -Value "VncAuth"
+          Set-ItemProperty -Path $reg -Name "AlwaysShared" -Value 1 -Type DWord
           Start-Process "C:\Program Files\TigerVNC\winvnc4.exe" -WindowStyle Hidden
-          Start-Sleep -Seconds 5
-
-          $port = netstat -ano | Select-String ":5900"
-          if ($port) { Write-Host "VNC listening on :5900" } else { Write-Host "VNC not yet on :5900" }
         env:
           VNC_PASSWORD: ${{ secrets.VNC_PASSWORD }}
 
-      # ── 4. noVNC (HTML5 VNC viewer) via websockify ────────────────────────
-      - name: Install websockify
-        shell: pwsh
-        run: pip install websockify --quiet
-
-      - name: Clone noVNC
+      - name: Setup noVNC
         shell: pwsh
         run: |
-          $ProgressPreference = 'SilentlyContinue'
+          pip install websockify --quiet
           git clone --depth 1 https://github.com/novnc/noVNC.git "$env:TEMP\noVNC"
+          Start-Process python -ArgumentList "-m websockify --web `"$env:TEMP\noVNC`" 6080 localhost:5900" -RedirectStandardOutput "$env:TEMP\websockify.log" -RedirectStandardError "$env:TEMP\websockify.log" -WindowStyle Hidden
 
-      - name: Start noVNC on port 6080
-        shell: pwsh
-        run: |
-          $novnc = "$env:TEMP\noVNC"
-          $log   = "$env:TEMP\websockify.log"
-          Start-Process python `
-            -ArgumentList "-m websockify --web `"$novnc`" 6080 localhost:5900" `
-            -RedirectStandardOutput $log -RedirectStandardError $log `
-            -WindowStyle Hidden
-          Start-Sleep -Seconds 3
-          Write-Host "noVNC running on :6080  ->  local: http://localhost:6080/vnc.html"
-
-      # ── 5. VS Code Server (code-server) on port 8080 ──────────────────────
-      - name: Install code-server
+      # ── 3. Install & Start code-server ──────────────────────────────────────
+      - name: Setup code-server
         shell: pwsh
         run: |
           npm install -g code-server 2>&1 | Select-Object -Last 3
-          Write-Host "code-server $(code-server --version)"
-
-      - name: Start code-server on port 8080
-        shell: pwsh
-        run: |
-          $csPass  = if ($env:CODESERVER_PASSWORD) { $env:CODESERVER_PASSWORD } else { "code12345" }
-          $log     = "$env:TEMP\codeserver.log"
+          $csPass = if ($env:CODESERVER_PASSWORD) { $env:CODESERVER_PASSWORD } else { "code12345" }
           $env:PASSWORD = $csPass
-
-          Start-Process code-server `
-            -ArgumentList "--bind-addr 0.0.0.0:8080 --auth password --disable-telemetry `"$env:GITHUB_WORKSPACE`"" `
-            -RedirectStandardOutput $log -RedirectStandardError $log `
-            -WindowStyle Hidden
-          Start-Sleep -Seconds 8
-          Write-Host "code-server running on :8080"
+          Start-Process code-server -ArgumentList "--bind-addr 0.0.0.0:8080 --auth password --disable-telemetry `"$env:GITHUB_WORKSPACE`"" -RedirectStandardOutput "$env:TEMP\codeserver.log" -RedirectStandardError "$env:TEMP\codeserver.log" -WindowStyle Hidden
         env:
           CODESERVER_PASSWORD: ${{ secrets.CODESERVER_PASSWORD }}
 
-      # ── 6. Cloudflare Quick Tunnels (no account needed) ───────────────────
-      - name: Install cloudflared
-        shell: pwsh
-        run: |
-          $ProgressPreference = 'SilentlyContinue'
-          Invoke-WebRequest `
-            -Uri "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe" `
-            -OutFile "$env:TEMP\cloudflared.exe"
-          & "$env:TEMP\cloudflared.exe" --version
-
-      - name: Start tunnels & print public URLs
+      # ── 4. Cloudflared Tunnels ──────────────────────────────────────────────
+      - name: Start Cloudflared Tunnels
         shell: pwsh
         run: |
           $cf = "$env:TEMP\cloudflared.exe"
+          Invoke-WebRequest -Uri "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe" -OutFile $cf
+          Start-Process $cf -ArgumentList "tunnel --url http://localhost:6080 --no-autoupdate" -RedirectStandardOutput "$env:TEMP\cf-novnc.log" -RedirectStandardError "$env:TEMP\cf-novnc.log" -WindowStyle Hidden
+          Start-Process $cf -ArgumentList "tunnel --url http://localhost:8080 --no-autoupdate" -RedirectStandardOutput "$env:TEMP\cf-cs.log" -RedirectStandardError "$env:TEMP\cf-cs.log" -WindowStyle Hidden
 
-          $logNovnc = "$env:TEMP\cf-novnc.log"
-          $logCs    = "$env:TEMP\cf-cs.log"
+      # ── 5. Pinggy TCP Tunnel (RDP) ──────────────────────────────────────────
+      - name: Start Pinggy Tunnel
+        shell: pwsh
+        run: |
+          $logRdp = "$env:TEMP\pinggy_rdp.log"
+          $rdpJob = Start-Job -ScriptBlock {
+              param($log)
+              & ssh -4 -o StrictHostKeyChecking=no -p 443 -R 0:localhost:3389 tcp@a.pinggy.io 2>&1 | ForEach-Object { Add-Content -Path $log -Value $_ }
+          } -ArgumentList $logRdp
 
-          Start-Process $cf `
-            -ArgumentList "tunnel --url http://localhost:6080 --no-autoupdate" `
-            -RedirectStandardOutput $logNovnc -RedirectStandardError $logNovnc `
-            -WindowStyle Hidden
-
-          Start-Process $cf `
-            -ArgumentList "tunnel --url http://localhost:8080 --no-autoupdate" `
-            -RedirectStandardOutput $logCs -RedirectStandardError $logCs `
-            -WindowStyle Hidden
-
-          Write-Host "Waiting 20s for tunnels to connect..."
-          Start-Sleep -Seconds 20
-
-          function Get-URL($logPath) {
-            $raw = Get-Content $logPath -Raw -ErrorAction SilentlyContinue
+      # ── 6. Summary & Connection Details ─────────────────────────────────────
+      - name: Connection Summary
+        shell: pwsh
+        run: |
+          Write-Host "Waiting 30s for tunnels..."
+          Start-Sleep -Seconds 30
+          
+          function Get-CF-URL($log) {
+            $raw = Get-Content $log -Raw -ErrorAction SilentlyContinue
             if ($raw -match 'https://[a-z0-9\-]+\.trycloudflare\.com') { return $matches[0] }
-            return "(not ready)"
+            return "(probing...)"
           }
 
-          $uNovnc = Get-URL $logNovnc
-          $uCs    = Get-URL $logCs
+          $uNovnc = Get-CF-URL "$env:TEMP\cf-novnc.log"
+          $uCs    = Get-CF-URL "$env:TEMP\cf-cs.log"
+          $rdpAddr = Select-String -Path "$env:TEMP\pinggy_rdp.log" -Pattern "tcp://[^ ]*\.(pgy\.in|pinggy\.link|pinggy\.io):[0-9]+" | ForEach-Object { $_.Matches.Value } | Select-Object -First 1
+          
+          $user = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name.Split('\')[1]
+          $pass = if ($env:SESSION_PASSWORD) { $env:SESSION_PASSWORD } else { "RunnerAdmin123!" }
 
-          Write-Host ""
           Write-Host "========================================================"
-          Write-Host "  noVNC  (Windows Desktop):  $uNovnc/vnc.html"
-          Write-Host "  VS Code Server:             $uCs"
-          Write-Host "--------------------------------------------------------"
-          Write-Host "  Default VNC password:       vnc12345"
-          Write-Host "  Default code-server pass:   code12345"
-          Write-Host "  (Override with GitHub Secrets: VNC_PASSWORD, CODESERVER_PASSWORD)"
+          Write-Host "  RDP (Direct):      $rdpAddr"
+          Write-Host "  noVNC (Browser):   $uNovnc/vnc.html"
+          Write-Host "  Code Server:       $uCs"
+          Write-Host "  RDP/Windows User:  $user"
+          Write-Host "  RDP/Windows Pass:  $pass"
+          Write-Host "  VNC/Code Password: vnc12345 / code12345 (defaults)"
           Write-Host "========================================================"
 
-      # ── 7. Keep runner alive ──────────────────────────────────────────────
+          # Save to file for tracking
+          "RDP_ADDRESS=$rdpAddr`r`nnoVNC_URL=$uNovnc/vnc.html`r`nCODESERVER_URL=$uCs`r`nUSER=$user" | Out-File ssh_connection.txt -Encoding utf8
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add ssh_connection.txt
+          git commit -m "Update connection details [skip ci]" --allow-empty
+          git push origin HEAD:main
+        env:
+          SESSION_PASSWORD: ${{ secrets.SESSION_PASSWORD }}
+
+      # ── 7. Keep Session Alive ───────────────────────────────────────────────
       - name: Keep session alive
         shell: pwsh
         run: |
-          $minutes  = [Math]::Min([int]"${{ github.event.inputs.session_duration }}", 340)
-          $logNovnc = "$env:TEMP\cf-novnc.log"
-          $logCs    = "$env:TEMP\cf-cs.log"
-
-          function Get-URL($logPath) {
-            $raw = Get-Content $logPath -Raw -ErrorAction SilentlyContinue
-            if ($raw -match 'https://[a-z0-9\-]+\.trycloudflare\.com') { return $matches[0] }
-            return "unknown"
-          }
-
-          Write-Host "Session running for $minutes minutes. Cancel job in Actions UI to stop early."
+          $minutes = [Math]::Min([int]"${{ github.event.inputs.session_duration }}", 340)
           $end = (Get-Date).AddMinutes($minutes)
-
           while ((Get-Date) -lt $end) {
-            Start-Sleep -Seconds 300
-            $remaining = [Math]::Round(($end - (Get-Date)).TotalMinutes)
-            Write-Host "[$([datetime]::Now.ToString('HH:mm'))] $remaining min remaining"
-            Write-Host "  noVNC:       $(Get-URL $logNovnc)/vnc.html"
-            Write-Host "  code-server: $(Get-URL $logCs)"
+              $rem = [Math]::Round(($end - (Get-Date)).TotalMinutes)
+              Write-Host "[$([datetime]::Now.ToString('HH:mm'))] $rem min remaining"
+              Start-Sleep -Seconds 300
           }
