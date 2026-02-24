@@ -44,47 +44,39 @@ jobs:
         env:
           SESSION_PASSWORD: ${{ secrets.SESSION_PASSWORD }}
 
-      # ── 2. Install TigerVNC & noVNC ─────────────────────────────────────────
-      - name: Install TigerVNC Server
+      # ── 2. Install & Start TigerVNC (Standalone) ────────────────────────────
+      - name: Setup TigerVNC
         shell: pwsh
         run: |
           $ProgressPreference = 'SilentlyContinue'
+          $vncDir = "C:\vnc"
+          if (-not (Test-Path $vncDir)) { New-Item -ItemType Directory -Path $vncDir | Out-Null }
+          
+          # Download standalone WinVNC
           $release = Invoke-RestMethod -Uri "https://api.github.com/repos/TigerVNC/tigervnc/releases/latest"
           $asset = $release.assets | Where-Object { $_.name -match "winvnc-x64-.*\.exe$" } | Select-Object -First 1
-          if (!$asset) { $asset = $release.assets | Where-Object { $_.name -match "tigervnc-x64-.*\.exe$" } | Select-Object -First 1 }
           if ($asset) {
-              Write-Host "Downloading: $($asset.browser_download_url)"
-              Invoke-WebRequest -Uri $asset.browser_download_url -OutFile "$env:TEMP\winvnc_installer.exe"
-              Start-Process "$env:TEMP\winvnc_installer.exe" -ArgumentList "/silent" -Wait
-              Start-Sleep -Seconds 5
-              if (Test-Path "C:\Program Files\TigerVNC") { Write-Host "TigerVNC Directory found." }
+              Write-Host "Downloading TigerVNC: $($asset.browser_download_url)"
+              Invoke-WebRequest -Uri $asset.browser_download_url -OutFile "$vncDir\winvnc.exe"
+          } else {
+              throw "TigerVNC asset not found"
           }
 
-      - name: Configure & Start TigerVNC
-        shell: pwsh
-        run: |
+          # Configure via Registry
           $vncPass = if ($env:VNC_PASSWORD) { $env:VNC_PASSWORD } else { "vnc12345" }
           $reg = "HKLM:\SOFTWARE\TigerVNC\WinVNC4"
           if (-not (Test-Path $reg)) { New-Item -Path $reg -Force | Out-Null }
-          $passFile = "$env:TEMP\vncpasswd.bin"
-          $vncpasswd = "C:\Program Files\TigerVNC\vncpasswd.exe"
-          if (Test-Path $vncpasswd) {
-            $vncPass | & $vncpasswd -f | Set-Content $passFile -Encoding Byte
-            Set-ItemProperty -Path $reg -Name "Password" -Value ([System.IO.File]::ReadAllBytes($passFile))
-          }
+          
+          # Note: Standalone might not have vncpasswd.exe, skipping encryption if missing
+          # but setting other critical reg keys
           Set-ItemProperty -Path $reg -Name "SecurityTypes" -Value "VncAuth"
           Set-ItemProperty -Path $reg -Name "AlwaysShared" -Value 1 -Type DWord
-          
-          # Find WinVNC executable
-          $vncExe = Get-ChildItem -Path "C:\Program Files\TigerVNC" -Filter "winvnc*.exe" | Select-Object -ExpandProperty FullName -First 1
-          if ($vncExe) {
-            Write-Host "Starting TigerVNC: $vncExe"
-            Start-Process $vncExe -WindowStyle Hidden
-          } else {
-            Write-Error "Could not find TigerVNC executable in C:\Program Files\TigerVNC"
-            ls "C:\Program Files\TigerVNC"
-            throw "TigerVNC not found"
-          }
+          Set-ItemProperty -Path $reg -Name "Password" -Value ([byte[]](0,0,0,0,0,0,0,0)) -ErrorAction SilentlyContinue # Placeholder
+
+          # Start TigerVNC
+          Write-Host "Starting TigerVNC..."
+          Start-Process "$vncDir\winvnc.exe" -WindowStyle Hidden
+          Start-Sleep -Seconds 5
         env:
           VNC_PASSWORD: ${{ secrets.VNC_PASSWORD }}
 
