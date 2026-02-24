@@ -1,4 +1,4 @@
-name: Windows Remote Dev Environment
+name: Windows Remote Dev (noVNC + VS Code Server)
 
 on:
   workflow_dispatch:
@@ -7,186 +7,192 @@ on:
         description: "Session duration in minutes (max 350)"
         required: false
         default: "60"
-      tunnel_token:
-        description: "Cloudflare tunnel token (optional, for persistent URL)"
-        required: false
-        default: ""
 
 jobs:
-  remote-windows-desktop:
+  remote-desktop:
     runs-on: windows-latest
-    timeout-minutes: 350
+    timeout-minutes: 355
 
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
 
-      # ── 1. Virtual Display (IDD virtual monitor) ───────────────────────────
-      - name: Setup virtual display
-        uses: cilix-io/virtual-display-windows@v1
-        with:
-          width: 1920
-          height: 1080
-          depth: 32
-
-      # ── 2. Install Chocolatey packages ─────────────────────────────────────
-      - name: Install dependencies via Chocolatey
+      # ── 1. Enable RDP so TigerVNC can mirror the desktop session ──────────
+      - name: Enable Remote Desktop
         shell: pwsh
         run: |
-          Set-ExecutionPolicy Bypass -Scope Process -Force
-          # TigerVNC server + noVNC (HTML5 VNC client)
-          choco install -y tigervnc
-          # Node.js (needed to run noVNC's websockify)
-          choco install -y nodejs-lts
-          # Git (usually present, ensure latest)
-          choco install -y git
-          refreshenv
+          Set-ItemProperty `
+            -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' `
+            -Name "fDenyTSConnections" -Value 0
+          Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
 
-      # ── 3. Configure & start TigerVNC Server ──────────────────────────────
-      - name: Configure TigerVNC
+          # Set a password on the runner user account
+          $pass = if ($env:SESSION_PASSWORD) { $env:SESSION_PASSWORD } else { "Actions2024!" }
+          $user = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name.Split('\')[1]
+          net user $user $pass 2>&1 | Out-Null
+          Write-Host "RDP enabled, user: $user"
+        env:
+          SESSION_PASSWORD: ${{ secrets.SESSION_PASSWORD }}
+
+      # ── 2. Download & install TigerVNC WinVNC (no choco, direct download) ─
+      - name: Install TigerVNC Server
         shell: pwsh
         run: |
-          # Create VNC password (change "actions123" to something stronger or
-          # pass it in via a GitHub secret: $env:VNC_PASSWORD)
-          $vncPass = if ($env:VNC_PASSWORD) { $env:VNC_PASSWORD } else { "actions123" }
-          $vncConfigDir = "$env:APPDATA\TigerVNC"
-          New-Item -ItemType Directory -Force -Path $vncConfigDir | Out-Null
+          $ProgressPreference = 'SilentlyContinue'
+          $url = "https://github.com/TigerVNC/tigervnc/releases/download/v1.14.1/tigervnc64-winvnc-1.14.1.exe"
+          Invoke-WebRequest -Uri $url -OutFile "$env:TEMP\winvnc.exe"
+          Start-Process "$env:TEMP\winvnc.exe" -ArgumentList "/silent" -Wait
+          Write-Host "TigerVNC WinVNC installed"
 
-          # Write encrypted passwd file using vncpasswd helper
-          $passFile = "$vncConfigDir\passwd"
-          echo $vncPass | & "C:\Program Files\TigerVNC\vncpasswd.exe" -f | Set-Content $passFile -Encoding Byte
+      # ── 3. Configure TigerVNC via registry ────────────────────────────────
+      - name: Configure & start TigerVNC
+        shell: pwsh
+        run: |
+          $vncPass = if ($env:VNC_PASSWORD) { $env:VNC_PASSWORD } else { "vnc12345" }
 
-          # Minimal server config
-          @"
-          SecurityTypes=VncAuth
-          Password=$passFile
-          AlwaysShared=1
-          NeverShared=0
-          DisconnectClients=0
-          Desktop=GitHubActions
-          "@ | Set-Content "$vncConfigDir\vncserver.ini"
+          $reg = "HKLM:\SOFTWARE\TigerVNC\WinVNC4"
+          if (-not (Test-Path $reg)) { New-Item -Path $reg -Force | Out-Null }
 
-          Write-Host "VNC config written to $vncConfigDir"
+          # Encrypt password with vncpasswd.exe
+          $passFile  = "$env:TEMP\vncpasswd.bin"
+          $vncpasswd = "C:\Program Files\TigerVNC\vncpasswd.exe"
+          if (Test-Path $vncpasswd) {
+            $vncPass | & $vncpasswd -f | Set-Content $passFile -Encoding Byte
+            Set-ItemProperty -Path $reg -Name "Password" `
+              -Value ([System.IO.File]::ReadAllBytes($passFile))
+          }
+
+          Set-ItemProperty -Path $reg -Name "SecurityTypes"     -Value "VncAuth"
+          Set-ItemProperty -Path $reg -Name "AlwaysShared"      -Value 1  -Type DWord
+          Set-ItemProperty -Path $reg -Name "DisconnectClients" -Value 0  -Type DWord
+          Set-ItemProperty -Path $reg -Name "LocalHost"         -Value 0  -Type DWord
+
+          # Start WinVNC
+          Start-Process "C:\Program Files\TigerVNC\winvnc4.exe" -WindowStyle Hidden
+          Start-Sleep -Seconds 5
+
+          $port = netstat -ano | Select-String ":5900"
+          if ($port) { Write-Host "VNC listening on :5900" } else { Write-Host "VNC not yet on :5900" }
         env:
           VNC_PASSWORD: ${{ secrets.VNC_PASSWORD }}
 
-      - name: Start TigerVNC Server on port 5900
+      # ── 4. noVNC (HTML5 VNC viewer) via websockify ────────────────────────
+      - name: Install websockify
+        shell: pwsh
+        run: pip install websockify --quiet
+
+      - name: Clone noVNC
         shell: pwsh
         run: |
-          # WinVNC4 (the TigerVNC Windows service executable)
-          $vnc = "C:\Program Files\TigerVNC\winvnc4.exe"
-          Start-Process $vnc -ArgumentList "-service" -WindowStyle Hidden
-          Start-Sleep -Seconds 5
-
-          # Verify it is listening
-          $listening = netstat -ano | Select-String "5900"
-          if ($listening) {
-            Write-Host "✅ VNC server is listening on port 5900"
-          } else {
-            Write-Host "⚠️  VNC port 5900 not detected yet — may still be starting"
-          }
-
-      # ── 4. Install & start noVNC (HTML5 VNC viewer) ───────────────────────
-      - name: Install noVNC + websockify
-        shell: pwsh
-        run: |
-          # Clone noVNC
+          $ProgressPreference = 'SilentlyContinue'
           git clone --depth 1 https://github.com/novnc/noVNC.git "$env:TEMP\noVNC"
-          # Install websockify (Python-based WebSocket-to-TCP proxy)
-          pip install websockify
 
-      - name: Start noVNC websockify on port 6080
+      - name: Start noVNC on port 6080
         shell: pwsh
         run: |
-          # websockify bridges browser WebSocket (6080) → VNC TCP (5900)
-          Start-Process python -ArgumentList `
-            "-m websockify --web $env:TEMP\noVNC 6080 localhost:5900" `
+          $novnc = "$env:TEMP\noVNC"
+          $log   = "$env:TEMP\websockify.log"
+          Start-Process python `
+            -ArgumentList "-m websockify --web `"$novnc`" 6080 localhost:5900" `
+            -RedirectStandardOutput $log -RedirectStandardError $log `
             -WindowStyle Hidden
           Start-Sleep -Seconds 3
-          Write-Host "✅ noVNC available on port 6080"
-          Write-Host "   Open: http://localhost:6080/vnc.html"
+          Write-Host "noVNC running on :6080  ->  local: http://localhost:6080/vnc.html"
 
-      # ── 5. Install & start VS Code Server (code-server) ───────────────────
+      # ── 5. VS Code Server (code-server) on port 8080 ──────────────────────
       - name: Install code-server
         shell: pwsh
         run: |
-          # Download the latest code-server Windows binary via npm
-          npm install -g @vscode/vscode-server-launcher 2>$null
-          # Fallback: use the standalone code-server package
-          npm install -g code-server
+          npm install -g code-server 2>&1 | Select-Object -Last 3
+          Write-Host "code-server $(code-server --version)"
 
       - name: Start code-server on port 8080
         shell: pwsh
         run: |
-          $csPass = if ($env:CODESERVER_PASSWORD) { $env:CODESERVER_PASSWORD } else { "actions123" }
+          $csPass  = if ($env:CODESERVER_PASSWORD) { $env:CODESERVER_PASSWORD } else { "code12345" }
+          $log     = "$env:TEMP\codeserver.log"
+          $env:PASSWORD = $csPass
 
-          Start-Process code-server -ArgumentList `
-            "--bind-addr 0.0.0.0:8080 --auth password --disable-telemetry $env:GITHUB_WORKSPACE" `
+          Start-Process code-server `
+            -ArgumentList "--bind-addr 0.0.0.0:8080 --auth password --disable-telemetry `"$env:GITHUB_WORKSPACE`"" `
+            -RedirectStandardOutput $log -RedirectStandardError $log `
             -WindowStyle Hidden
-          Start-Sleep -Seconds 5
-
-          Write-Host "✅ VS Code Server started on port 8080"
-          Write-Host "   Password: $csPass"
+          Start-Sleep -Seconds 8
+          Write-Host "code-server running on :8080"
         env:
-          PASSWORD: ${{ secrets.CODESERVER_PASSWORD }}
+          CODESERVER_PASSWORD: ${{ secrets.CODESERVER_PASSWORD }}
 
-      # ── 6. Expose via Cloudflare Tunnel (public HTTPS URLs, no port-forward)
+      # ── 6. Cloudflare Quick Tunnels (no account needed) ───────────────────
       - name: Install cloudflared
         shell: pwsh
-        run: choco install -y cloudflared
+        run: |
+          $ProgressPreference = 'SilentlyContinue'
+          Invoke-WebRequest `
+            -Uri "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe" `
+            -OutFile "$env:TEMP\cloudflared.exe"
+          & "$env:TEMP\cloudflared.exe" --version
 
-      - name: Start Cloudflare tunnels for noVNC and code-server
+      - name: Start tunnels & print public URLs
         shell: pwsh
         run: |
-          # Quick tunnels — no account needed, gives random *.trycloudflare.com URLs
-          # For a stable URL, set the CLOUDFLARE_TUNNEL_TOKEN secret and use:
-          #   cloudflared tunnel run --token <token>
+          $cf = "$env:TEMP\cloudflared.exe"
 
-          # noVNC tunnel (port 6080)
-          $novncLog  = "$env:TEMP\novnc-tunnel.log"
-          Start-Process cloudflared -ArgumentList "tunnel --url http://localhost:6080" `
-            -RedirectStandardOutput $novncLog -RedirectStandardError $novncLog `
+          $logNovnc = "$env:TEMP\cf-novnc.log"
+          $logCs    = "$env:TEMP\cf-cs.log"
+
+          Start-Process $cf `
+            -ArgumentList "tunnel --url http://localhost:6080 --no-autoupdate" `
+            -RedirectStandardOutput $logNovnc -RedirectStandardError $logNovnc `
             -WindowStyle Hidden
 
-          # code-server tunnel (port 8080)
-          $csLog = "$env:TEMP\codeserver-tunnel.log"
-          Start-Process cloudflared -ArgumentList "tunnel --url http://localhost:8080" `
-            -RedirectStandardOutput $csLog -RedirectStandardError $csLog `
+          Start-Process $cf `
+            -ArgumentList "tunnel --url http://localhost:8080 --no-autoupdate" `
+            -RedirectStandardOutput $logCs -RedirectStandardError $logCs `
             -WindowStyle Hidden
 
-          # Wait for tunnels to establish and print the public URLs
-          Write-Host "⏳ Waiting for Cloudflare tunnels to initialize..."
-          Start-Sleep -Seconds 15
+          Write-Host "Waiting 20s for tunnels to connect..."
+          Start-Sleep -Seconds 20
+
+          function Get-URL($logPath) {
+            $raw = Get-Content $logPath -Raw -ErrorAction SilentlyContinue
+            if ($raw -match 'https://[a-z0-9\-]+\.trycloudflare\.com') { return $matches[0] }
+            return "(not ready)"
+          }
+
+          $uNovnc = Get-URL $logNovnc
+          $uCs    = Get-URL $logCs
 
           Write-Host ""
-          Write-Host "════════════════════════════════════════════════════════"
-          Write-Host "  🖥️  noVNC (Virtual Desktop) URL:"
-          Select-String -Path $novncLog -Pattern "trycloudflare.com" | ForEach-Object {
-            $url = ($_.Line -split " " | Where-Object { $_ -match "https://" })
-            Write-Host "      $url/vnc.html"
-          }
-          Write-Host ""
-          Write-Host "  💻  VS Code Server URL:"
-          Select-String -Path $csLog -Pattern "trycloudflare.com" | ForEach-Object {
-            $url = ($_.Line -split " " | Where-Object { $_ -match "https://" })
-            Write-Host "      $url"
-          }
-          Write-Host "════════════════════════════════════════════════════════"
-          Write-Host ""
-          Write-Host "  Default credentials (unless secrets are set):"
-          Write-Host "    VNC password:         actions123"
-          Write-Host "    code-server password: actions123"
-          Write-Host ""
-          Write-Host "  ⚠️  Set GitHub Secrets for real passwords:"
-          Write-Host "    VNC_PASSWORD          → used by TigerVNC"
-          Write-Host "    CODESERVER_PASSWORD   → used by code-server"
+          Write-Host "========================================================"
+          Write-Host "  noVNC  (Windows Desktop):  $uNovnc/vnc.html"
+          Write-Host "  VS Code Server:             $uCs"
+          Write-Host "--------------------------------------------------------"
+          Write-Host "  Default VNC password:       vnc12345"
+          Write-Host "  Default code-server pass:   code12345"
+          Write-Host "  (Override with GitHub Secrets: VNC_PASSWORD, CODESERVER_PASSWORD)"
+          Write-Host "========================================================"
 
-      # ── 7. Keep the runner alive for the requested session duration ────────
+      # ── 7. Keep runner alive ──────────────────────────────────────────────
       - name: Keep session alive
         shell: pwsh
         run: |
-          $minutes = [int]"${{ github.event.inputs.session_duration }}"
-          $minutes = [Math]::Min($minutes, 340)   # hard cap below GH 6h limit
-          Write-Host "🕐 Session will stay alive for $minutes minutes."
-          Write-Host "   Stop the workflow manually in GitHub Actions UI to end early."
-          Start-Sleep -Seconds ($minutes * 60)
+          $minutes  = [Math]::Min([int]"${{ github.event.inputs.session_duration }}", 340)
+          $logNovnc = "$env:TEMP\cf-novnc.log"
+          $logCs    = "$env:TEMP\cf-cs.log"
+
+          function Get-URL($logPath) {
+            $raw = Get-Content $logPath -Raw -ErrorAction SilentlyContinue
+            if ($raw -match 'https://[a-z0-9\-]+\.trycloudflare\.com') { return $matches[0] }
+            return "unknown"
+          }
+
+          Write-Host "Session running for $minutes minutes. Cancel job in Actions UI to stop early."
+          $end = (Get-Date).AddMinutes($minutes)
+
+          while ((Get-Date) -lt $end) {
+            Start-Sleep -Seconds 300
+            $remaining = [Math]::Round(($end - (Get-Date)).TotalMinutes)
+            Write-Host "[$([datetime]::Now.ToString('HH:mm'))] $remaining min remaining"
+            Write-Host "  noVNC:       $(Get-URL $logNovnc)/vnc.html"
+            Write-Host "  code-server: $(Get-URL $logCs)"
+          }
