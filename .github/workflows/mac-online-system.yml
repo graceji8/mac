@@ -53,9 +53,25 @@ jobs:
           git clone https://github.com/novnc/noVNC.git
           git clone https://github.com/novnc/websockify.git ./noVNC/utils/websockify
           
-          # Install NoMachine
-          curl -L -o nomachine_8.14.2_1.pkg https://download.nomachine.com/download/8.14/Mac/nomachine_8.14.2_1.pkg
-          sudo installer -pkg nomachine_8.14.2_1.pkg -target /
+          # Install NoMachine (ARM64)
+          curl -L -o nomachine.dmg https://download.nomachine.com/download/8.14/Mac/nomachine_8.14.2_1_arm64.dmg
+          if [ ! -s nomachine.dmg ]; then
+            echo "ARM64 download failed, trying generic DMG..."
+            curl -L -o nomachine.dmg https://download.nomachine.com/download/8.14/Mac/nomachine_8.14.2_1.dmg
+          fi
+          
+          if [ -s nomachine.dmg ]; then
+            echo "Mounting NoMachine DMG..."
+            # GitHub runners might have issues with /Volumes, using a custom mount point
+            mkdir -p /tmp/nomachine_mount
+            hdiutil attach nomachine.dmg -mountpoint /tmp/nomachine_mount -nobrowse -quiet
+            echo "Installing NoMachine..."
+            sudo installer -pkg /tmp/nomachine_mount/NoMachine.pkg -target /
+            hdiutil detach /tmp/nomachine_mount
+          else
+            echo "Failed to download NoMachine"
+            exit 1
+          fi
 
       - name: Setup Tailscale
         if: env.TAILSCALE_AUTHKEY != ''
