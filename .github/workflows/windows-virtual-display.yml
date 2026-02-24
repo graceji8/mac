@@ -51,13 +51,15 @@ jobs:
           $vncDir = "C:\vnc"
           if (-not (Test-Path $vncDir)) { New-Item -ItemType Directory -Path $vncDir | Out-Null }
           
-          # Download standalone WinVNC from SourceForge (GitHub assets are empty)
+          # Download standalone WinVNC from SourceForge using curl (more reliable for redirects)
           $vncUrl = "https://downloads.sourceforge.net/project/tigervnc/stable/1.13.1/winvnc-x64-1.13.1.exe"
           Write-Host "Downloading TigerVNC from SourceForge: $vncUrl"
-          [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-          Invoke-WebRequest -Uri $vncUrl -OutFile "$vncDir\winvnc.exe" -MaximumRedirection 10
+          curl.exe -L -o "$vncDir\winvnc.exe" $vncUrl
           
           if (-not (Test-Path "$vncDir\winvnc.exe")) { throw "TigerVNC download failed" }
+          $size = (Get-Item "$vncDir\winvnc.exe").Length
+          Write-Host "Downloaded file size: $size bytes"
+          if ($size -lt 1000000) { throw "Downloaded file is too small ($size bytes), likely an error page." }
 
           # Configure via Registry
           $vncPass = if ($env:VNC_PASSWORD) { $env:VNC_PASSWORD } else { "vnc12345" }
