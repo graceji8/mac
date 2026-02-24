@@ -54,7 +54,7 @@ jobs:
           git clone https://github.com/novnc/websockify.git ./noVNC/utils/websockify
           
           # Install NoMachine
-          curl -O https://download.nomachine.com/download/8.14/Mac/nomachine_8.14.2_1.pkg
+          curl -L -o nomachine_8.14.2_1.pkg https://download.nomachine.com/download/8.14/Mac/nomachine_8.14.2_1.pkg
           sudo installer -pkg nomachine_8.14.2_1.pkg -target /
 
       - name: Setup Tailscale
