@@ -23,18 +23,24 @@ jobs:
       - name: Enable Remote Desktop
         shell: pwsh
         run: |
+          # Ensure registry paths exist and set properties
           Set-ItemProperty `
             -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' `
-            -Name "fDenyTSConnections" -Value 0
-          Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+            -Name "fDenyTSConnections" -Value 0 -ErrorAction SilentlyContinue
+          
+          Enable-NetFirewallRule -DisplayGroup "Remote Desktop" -ErrorAction SilentlyContinue
+          
           Set-ItemProperty `
             -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
-            -Name "UserAuthentication" -Value 0
+            -Name "UserAuthentication" -Value 0 -ErrorAction SilentlyContinue
 
-          $pass = if ($env:SESSION_PASSWORD) { $env:SESSION_PASSWORD } else { "RunnerAdmin123!" }
+          # Set password and show errors if any
+          $pass = if ($env:SESSION_PASSWORD) { $env:SESSION_PASSWORD } else { "RunnerAdmin!123" }
           $user = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name.Split('\')[1]
-          net user $user $pass 2>&1 | Out-Null
-          Write-Host "RDP enabled. User: $user"
+          Write-Host "Setting password for user: $user"
+          net user $user $pass
+          
+          Write-Host "RDP configuration applied. User: $user"
         env:
           SESSION_PASSWORD: ${{ secrets.SESSION_PASSWORD }}
 
