@@ -34,15 +34,28 @@ jobs:
         env:
           SESSION_PASSWORD: ${{ secrets.SESSION_PASSWORD }}
 
-      # ── 2. Download & install TigerVNC WinVNC (no choco, direct download) ─
+      # ── 2. Install TigerVNC WinVNC Server ───────────────────────────────────
       - name: Install TigerVNC Server
         shell: pwsh
         run: |
           $ProgressPreference = 'SilentlyContinue'
-          $url = "https://github.com/TigerVNC/tigervnc/releases/download/v1.14.1/tigervnc64-winvnc-1.14.1.exe"
-          Invoke-WebRequest -Uri $url -OutFile "$env:TEMP\winvnc.exe"
-          Start-Process "$env:TEMP\winvnc.exe" -ArgumentList "/silent" -Wait
-          Write-Host "TigerVNC WinVNC installed"
+          # Dynamically fetch the latest release URL from GitHub API
+          $release = Invoke-RestMethod -Uri "https://api.github.com/repos/TigerVNC/tigervnc/releases/latest"
+          $asset = $release.assets | Where-Object { $_.name -match "winvnc.*\.exe$" } | Select-Object -First 1
+          if (!$asset) {
+              Write-Warning "winvnc asset not found in latest release, trying fixed version..."
+              $asset = $release.assets | Where-Object { $_.name -match "tigervnc.*\.exe$" } | Select-Object -First 1
+          }
+          if ($asset) {
+              Write-Host "Downloading: $($asset.browser_download_url)"
+              Invoke-WebRequest -Uri $asset.browser_download_url -OutFile "$env:TEMP\winvnc.exe"
+              Start-Process "$env:TEMP\winvnc.exe" -ArgumentList "/silent" -Wait
+              Write-Host "TigerVNC WinVNC installed"
+          } else {
+              Write-Warning "Could not find TigerVNC WinVNC asset. Available assets:"
+              $release.assets | ForEach-Object { Write-Host "  - $($_.name)" }
+              throw "TigerVNC WinVNC not found in latest release"
+          }
 
       # ── 3. Configure TigerVNC via registry ────────────────────────────────
       - name: Configure & start TigerVNC
