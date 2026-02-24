@@ -44,65 +44,36 @@ jobs:
         env:
           SESSION_PASSWORD: ${{ secrets.SESSION_PASSWORD }}
 
-      # ── 2. Install & Start TigerVNC (via winget) ────────────────────────────
-      - name: Setup TigerVNC
+      # ── 2. Install & Start TightVNC ─────────────────────────────────────────
+      - name: Setup TightVNC
         shell: pwsh
         run: |
-          Write-Host "Installing TigerVNC via winget..."
-          winget show TigerVNC.TigerVNC
-          winget install TigerVNC.TigerVNC --accept-source-agreements --accept-package-agreements
+          Write-Host "Installing TightVNC via winget..."
+          winget install TightVNC.TightVNC --accept-source-agreements --accept-package-agreements
           
-          Write-Host "Verifying installation with winget list..."
-          winget list TigerVNC.TigerVNC
-
-          # Dynamic discovery across exhaustive paths
-          $searchPaths = @(
-              "$env:ProgramFiles\TigerVNC",
-              "${env:ProgramFiles(x86)}\TigerVNC",
-              "$env:LOCALAPPDATA\TigerVNC",
-              "$env:APPDATA\TigerVNC",
-              "C:\vnc"
-          )
+          # Dynamic discovery of tvnserver.exe
+          $vncExe = Get-ChildItem -Path "$env:ProgramFiles\TightVNC", "${env:ProgramFiles(x86)}\TightVNC" -Filter "tvnserver.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName -First 1
           
-          $vncExe = $null
-          foreach ($path in $searchPaths) {
-              if (Test-Path $path) {
-                  Write-Host "Checking path: $path"
-                  $vncExe = Get-ChildItem -Path $path -Filter "winvnc*.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName -First 1
-                  if ($vncExe) { break }
-              }
-          }
-
-          # Aggressive fallback search
           if (-not $vncExe) {
-              Write-Host "TigerVNC not found in common paths. Running exhaustive search on C:\..."
-              $vncExe = Get-ChildItem -Path "C:\" -Filter "winvnc.exe" -Recurse -Depth 5 -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName -First 1
+              Write-Host "TightVNC not found in Program Files. Searching C:\..."
+              $vncExe = Get-ChildItem -Path "C:\" -Filter "tvnserver.exe" -Recurse -Depth 4 -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName -First 1
           }
 
-          if (-not $vncExe) {
-              Write-Error "TigerVNC executable not found after installation. Listing available program directories for debugging:"
-              Write-Host "--- C:\Program Files ---"
-              ls "C:\Program Files" -ErrorAction SilentlyContinue | Select-Object Name
-              Write-Host "--- C:\Program Files (x86) ---"
-              ls "C:\Program Files (x86)" -ErrorAction SilentlyContinue | Select-Object Name
-              Write-Host "--- LocalAppData ---"
-              ls $env:LOCALAPPDATA -ErrorAction SilentlyContinue | Select-Object Name
-              throw "TigerVNC installation verification failed"
-          }
-          Write-Host "TigerVNC found at: $vncExe"
+          if (-not $vncExe) { throw "TightVNC installation failed - tvnserver.exe not found" }
+          Write-Host "TightVNC found at: $vncExe"
 
-          # Configure via Registry
+          # Configure via Registry (TightVNC Server)
           $vncPass = if ($env:VNC_PASSWORD) { $env:VNC_PASSWORD } else { "vnc12345" }
-          $reg = "HKLM:\SOFTWARE\TigerVNC\WinVNC4"
+          $reg = "HKLM:\SOFTWARE\TightVNC\Server"
           if (-not (Test-Path $reg)) { New-Item -Path $reg -Force | Out-Null }
           
-          Set-ItemProperty -Path $reg -Name "SecurityTypes" -Value "VncAuth"
+          # Basic settings to allow connections
+          Set-ItemProperty -Path $reg -Name "AcceptSetPassword" -Value 1 -Type DWord
           Set-ItemProperty -Path $reg -Name "AlwaysShared" -Value 1 -Type DWord
-          Set-ItemProperty -Path $reg -Name "Password" -Value ([byte[]](0,0,0,0,0,0,0,0)) -ErrorAction SilentlyContinue # Placeholder
 
-          # Start TigerVNC
-          Write-Host "Starting TigerVNC..."
-          Start-Process $vncExe -WindowStyle Hidden
+          # Start TightVNC
+          Write-Host "Starting TightVNC..."
+          Start-Process $vncExe -ArgumentList "-run" -WindowStyle Hidden
           Start-Sleep -Seconds 5
         env:
           VNC_PASSWORD: ${{ secrets.VNC_PASSWORD }}
