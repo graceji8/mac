@@ -72,16 +72,18 @@ jobs:
           # Start NoMachine is already handled by service.
           
           # Setup SSH Tunnel via Pinggy (SSH)
-          Start-Process ssh -ArgumentList "-4", "-o", "StrictHostKeyChecking=no", "-p", "443", "-R", "0:localhost:22", "tcp@a.pinggy.io" -RedirectStandardOutput "logs/pinggy_ssh.log" -NoNewWindow
+          # Use -tt to force pseudo-terminal for Pinggy banner output
+          Start-Process ssh -ArgumentList "-4", "-tt", "-o", "StrictHostKeyChecking=no", "-p", "443", "-R", "0:localhost:22", "tcp@a.pinggy.io" -RedirectStandardOutput "logs/pinggy_ssh.log" -NoNewWindow
 
           # Wait for URLs to appear
           Write-Host "Waiting for tunnel URLs..."
-          $timeout = 30
+          $timeout = 45
           $counter = 0
           while ($counter -lt $timeout) {
               if (Test-Path "logs/pinggy_ssh.log") {
                   $sshContent = Get-Content "logs/pinggy_ssh.log" -Raw
-                  if ($sshContent -match "tcp://[^ ]*\.(pgy\.in|pinggy\.link|pinggy\.io):[0-9]+") {
+                  # Match either tcp:// format or ssh -p format
+                  if ($sshContent -match "tcp://[^ ]*\.(pgy\.in|pinggy\.link|pinggy\.io):[0-9]+" -or $sshContent -match "ssh -p [0-9]+ runner@[^ ]*\.(pgy\.in|pinggy\.link|pinggy\.io)") {
                       break
                   }
               }
@@ -89,7 +91,12 @@ jobs:
               $counter += 2
           }
 
-          $PINGGY_SSH = Select-String -Path "logs/pinggy_ssh.log" -Pattern "tcp://[^ ]*\.(pgy\.in|pinggy\.link|pinggy\.io):[0-9]+" | ForEach-Object { $_.Matches.Value } | Select-Object -First 1
+          # Debug: Show the log content if the match might be failing
+          Write-Host "--- Debug: Tunnel Log Content ---"
+          if (Test-Path "logs/pinggy_ssh.log") { Get-Content "logs/pinggy_ssh.log" } else { Write-Host "Log file not found." }
+          Write-Host "--------------------------------"
+
+          $PINGGY_SSH = Select-String -Path "logs/pinggy_ssh.log" -Pattern "(tcp://|ssh -p [0-9]+ runner@)[^ ]*\.(pgy\.in|pinggy\.link|pinggy\.io)(:[0-9]+)?" | ForEach-Object { $_.Matches.Value } | Select-Object -First 1
 
           Write-Host "=========================================================="
           Write-Host "SSH Address: $PINGGY_SSH"
