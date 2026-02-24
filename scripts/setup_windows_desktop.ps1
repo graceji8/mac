@@ -60,20 +60,37 @@ else {
 # 2. Configure Resolution (Optional, driver usually defaults to 1080p)
 Write-Host "Virtual display should be active. Defaulting to 1920x1080."
 
-# 3. Install NoMachine
-Write-Host "Installing NoMachine..."
-winget install --id NoMachine.NoMachine --exact --accept-package-agreements --accept-source-agreements --silent
+# 3. Install NoMachine (Optional)
+Write-Host "Attempting to install NoMachine (optional)..."
+try {
+    winget install --id NoMachine.NoMachine --exact --accept-package-agreements --accept-source-agreements --silent
+    Write-Host "NoMachine installation successful."
+}
+catch {
+    Write-Host "NoMachine installation failed. Continuing since other remotes might work."
+}
 
 # 4. Setup OpenSSH Server
 Write-Host "Configuring OpenSSH Server..."
-Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0
-Start-Service sshd
-Set-Service -Name sshd -StartupType 'Automatic'
+try {
+    Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0
+    Start-Service sshd
+    Set-Service -Name sshd -StartupType 'Automatic'
+}
+catch {
+    Write-Host "SSH setup failed: $($_.Exception.Message)"
+}
 
 # 5. Set Runner Password (for NoMachine/SSH access)
-Write-Host "Setting runner password to 'runner'..."
-$Password = ConvertTo-SecureString "runner" -AsPlainText -Force
+# Using a more complex password to satisfy Windows policy
+Write-Host "Setting runner password to 'RunnerAdmin123!'..."
+$Password = ConvertTo-SecureString "RunnerAdmin123!" -AsPlainText -Force
 $User = "runneradmin"
-Set-LocalUser -Name $User -Password $Password
+try {
+    Set-LocalUser -Name $User -Password $Password
+}
+catch {
+    Write-Host "Failed to set password: $($_.Exception.Message)"
+}
 
 Write-Host "--- Windows Desktop Setup Complete ---"

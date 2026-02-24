@@ -99,14 +99,14 @@ jobs:
           Write-Host "SSH Address: $PINGGY_SSH"
           Write-Host "NoMachine Address: $PINGGY_NX"
           Write-Host "Username: runneradmin"
-          Write-Host "Password: runner"
+          Write-Host "Password: RunnerAdmin123!"
           Write-Host "=========================================================="
 
           # Save connection info
           "SSH_ADDRESS: $PINGGY_SSH`n" +
           "NOMACHINE_ADDRESS: $PINGGY_NX`n" +
           "USERNAME: runneradmin`n" +
-          "PASSWORD: runner" | Out-File -FilePath "ssh_connection.txt"
+          "PASSWORD: RunnerAdmin123!" | Out-File -FilePath "ssh_connection.txt"
 
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
