@@ -1,0 +1,135 @@
+name: windows-system-automation
+
+on:
+  workflow_dispatch:
+    inputs:
+      debug_mode:
+        description: 'Enable VNC/NoMachine for monitoring and VS Code server'
+        required: false
+        default: true
+        type: boolean
+
+jobs:
+  windows-system:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+      
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Create session directories
+        run: |
+          mkdir -p .vscode-session/data
+          mkdir -p .vscode-session/extensions
+          mkdir -p logs
+
+      - name: Setup Virtual Display & Remote Access
+        shell: powershell
+        run: |
+          ./scripts/setup_windows_desktop.ps1
+
+      - name: Install System Dependencies
+        shell: powershell
+        run: |
+          # Install tunneling tools
+          winget install --id Cloudflare.cloudflared --exact --accept-package-agreements --accept-source-agreements --silent
+          
+          # Setup VS Code Server
+          Invoke-WebRequest -Uri "https://code-server.dev/install.sh" -OutFile "install-code-server.sh"
+          # Since install.sh is for linux, we use the windows binary or winget for code-server if available, 
+          # otherwise we can use 'code' (VS Code) itself with 'code tunnel'
+          
+          Write-Host "Installing VS Code..."
+          winget install --id Microsoft.VisualStudioCode --exact --accept-package-agreements --accept-source-agreements --silent
+
+      - name: Setup Tailscale
+        if: env.TAILSCALE_AUTHKEY != ''
+        uses: tailscale/github-action@v3
+        with:
+          authkey: ${{ secrets.TAILSCALE_AUTHKEY }}
+        env:
+          TAILSCALE_AUTHKEY: ${{ secrets.TAILSCALE_AUTHKEY }}
+
+      - name: Start Services & Tunnels
+        shell: powershell
+        run: |
+          # Create logs directory if it doesn't exist
+          if (!(Test-Path "logs")) { New-Item -ItemType Directory -Path "logs" }
+
+          # Setup VS Code Tunnel (CLI based)
+          # Note: 'code tunnel' requires interactive login usually, 
+          # but we can use 'code-server' if we port the binary or use a similar tool.
+          # For Windows runners, 'code tunnel' with a token is preferred.
+          
+          # Start Cloudflared for VS Code Web (if using a local server)
+          # For now, let's use cloudflared to tunnel a local web server if we had one.
+          # Since code-server is tricky on windows runners, we'll focus on NoMachine and SSH.
+
+          # Start NoMachine is already handled by service.
+          
+          # Setup SSH Tunnel via Pinggy (SSH)
+          Start-Process ssh -ArgumentList "-4", "-o", "StrictHostKeyChecking=no", "-p", "443", "-R", "0:localhost:22", "tcp@a.pinggy.io" -RedirectStandardOutput "logs/pinggy_ssh.log" -NoNewWindow
+          
+          # Setup SSH Tunnel via Pinggy (NoMachine - Default port 4000)
+          Start-Process ssh -ArgumentList "-4", "-o", "StrictHostKeyChecking=no", "-p", "443", "-R", "0:localhost:4000", "tcp@a.pinggy.io" -RedirectStandardOutput "logs/pinggy_nx.log" -NoNewWindow
+
+          # Wait for URLs to appear
+          Write-Host "Waiting for tunnel URLs..."
+          $timeout = 30
+          $counter = 0
+          while ($counter -lt $timeout) {
+              if (Test-Path "logs/pinggy_ssh.log") {
+                  $sshContent = Get-Content "logs/pinggy_ssh.log" -Raw
+                  if ($sshContent -match "tcp://[^ ]*\.(pgy\.in|pinggy\.link|pinggy\.io):[0-9]+") {
+                      break
+                  }
+              }
+              Start-Sleep -Seconds 2
+              $counter += 2
+          }
+
+          $PINGGY_SSH = Select-String -Path "logs/pinggy_ssh.log" -Pattern "tcp://[^ ]*\.(pgy\.in|pinggy\.link|pinggy\.io):[0-9]+" | ForEach-Object { $_.Matches.Value } | Select-Object -First 1
+          $PINGGY_NX = Select-String -Path "logs/pinggy_nx.log" -Pattern "tcp://[^ ]*\.(pgy\.in|pinggy\.link|pinggy\.io):[0-9]+" | ForEach-Object { $_.Matches.Value } | Select-Object -First 1
+
+          Write-Host "=========================================================="
+          Write-Host "SSH Address: $PINGGY_SSH"
+          Write-Host "NoMachine Address: $PINGGY_NX"
+          Write-Host "Username: runneradmin"
+          Write-Host "Password: runner"
+          Write-Host "=========================================================="
+
+          # Save connection info
+          "SSH_ADDRESS: $PINGGY_SSH`n" +
+          "NOMACHINE_ADDRESS: $PINGGY_NX`n" +
+          "USERNAME: runneradmin`n" +
+          "PASSWORD: runner" | Out-File -FilePath "ssh_connection.txt"
+
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add ssh_connection.txt
+          git commit -m "Update windows SSH connection details [skip ci]"
+          git push origin HEAD:main
+
+      - name: Interactive Session Wait
+        shell: powershell
+        run: |
+          Write-Host "Entering interactive session. Create a file named 'C:\save' or 'C:\continue' to stop."
+          while ($true) {
+              if (Test-Path "C:\save" -Or Test-Path "C:\continue") {
+                  Write-Host "Exit signal received. Terminating interactive session."
+                  break
+              }
+              Start-Sleep -Seconds 5
+          }
+
+      - name: Cleanup
+        if: always()
+        shell: powershell
+        run: |
+          Write-Host "Cleaning up..."
+          Get-Process -Name "ssh" -ErrorAction SilentlyContinue | Stop-Process -Force
+          Remove-Item -Path "C:\save", "C:\continue" -ErrorAction SilentlyContinue
