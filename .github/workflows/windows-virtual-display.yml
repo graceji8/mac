@@ -49,7 +49,7 @@ jobs:
         shell: pwsh
         run: |
           Write-Host "Installing TightVNC via winget..."
-          winget install TightVNC.TightVNC --accept-source-agreements --accept-package-agreements
+          winget install GlavSoft.TightVNC --accept-source-agreements --accept-package-agreements
           
           # Dynamic discovery of tvnserver.exe
           $vncExe = Get-ChildItem -Path "$env:ProgramFiles\TightVNC", "${env:ProgramFiles(x86)}\TightVNC" -Filter "tvnserver.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName -First 1
