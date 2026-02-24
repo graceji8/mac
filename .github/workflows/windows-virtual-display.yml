@@ -83,7 +83,7 @@ jobs:
         run: |
           pip install websockify --quiet
           git clone --depth 1 https://github.com/novnc/noVNC.git "$env:TEMP\noVNC"
-          Start-Process python -ArgumentList "-m websockify --web `"$env:TEMP\noVNC`" 6080 localhost:5900" -RedirectStandardOutput "$env:TEMP\websockify.log" -RedirectStandardError "$env:TEMP\websockify.log" -WindowStyle Hidden
+          Start-Process python -ArgumentList "-m websockify --web `"$env:TEMP\noVNC`" 6080 localhost:5900" -RedirectStandardOutput "$env:TEMP\websockify.out.log" -RedirectStandardError "$env:TEMP\websockify.err.log" -WindowStyle Hidden
 
       # ── 3. Install & Start code-server ──────────────────────────────────────
       - name: Setup code-server
@@ -92,7 +92,7 @@ jobs:
           npm install -g code-server 2>&1 | Select-Object -Last 3
           $csPass = if ($env:CODESERVER_PASSWORD) { $env:CODESERVER_PASSWORD } else { "code12345" }
           $env:PASSWORD = $csPass
-          Start-Process code-server -ArgumentList "--bind-addr 0.0.0.0:8080 --auth password --disable-telemetry `"$env:GITHUB_WORKSPACE`"" -RedirectStandardOutput "$env:TEMP\codeserver.log" -RedirectStandardError "$env:TEMP\codeserver.log" -WindowStyle Hidden
+          Start-Process code-server -ArgumentList "--bind-addr 0.0.0.0:8080 --auth password --disable-telemetry `"$env:GITHUB_WORKSPACE`"" -RedirectStandardOutput "$env:TEMP\codeserver.out.log" -RedirectStandardError "$env:TEMP\codeserver.err.log" -WindowStyle Hidden
         env:
           CODESERVER_PASSWORD: ${{ secrets.CODESERVER_PASSWORD }}
 
@@ -102,8 +102,8 @@ jobs:
         run: |
           $cf = "$env:TEMP\cloudflared.exe"
           Invoke-WebRequest -Uri "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe" -OutFile $cf
-          Start-Process $cf -ArgumentList "tunnel --url http://localhost:6080 --no-autoupdate" -RedirectStandardOutput "$env:TEMP\cf-novnc.log" -RedirectStandardError "$env:TEMP\cf-novnc.log" -WindowStyle Hidden
-          Start-Process $cf -ArgumentList "tunnel --url http://localhost:8080 --no-autoupdate" -RedirectStandardOutput "$env:TEMP\cf-cs.log" -RedirectStandardError "$env:TEMP\cf-cs.log" -WindowStyle Hidden
+          Start-Process $cf -ArgumentList "tunnel --url http://localhost:6080 --no-autoupdate" -RedirectStandardOutput "$env:TEMP\cf-novnc.out.log" -RedirectStandardError "$env:TEMP\cf-novnc.err.log" -WindowStyle Hidden
+          Start-Process $cf -ArgumentList "tunnel --url http://localhost:8080 --no-autoupdate" -RedirectStandardOutput "$env:TEMP\cf-cs.out.log" -RedirectStandardError "$env:TEMP\cf-cs.err.log" -WindowStyle Hidden
 
       # ── 5. Pinggy TCP Tunnel (RDP) ──────────────────────────────────────────
       - name: Start Pinggy Tunnel
@@ -128,8 +128,8 @@ jobs:
             return "(probing...)"
           }
 
-          $uNovnc = Get-CF-URL "$env:TEMP\cf-novnc.log"
-          $uCs    = Get-CF-URL "$env:TEMP\cf-cs.log"
+          $uNovnc = Get-CF-URL "$env:TEMP\cf-novnc.out.log"
+          $uCs    = Get-CF-URL "$env:TEMP\cf-cs.out.log"
           $rdpAddr = Select-String -Path "$env:TEMP\pinggy_rdp.log" -Pattern "tcp://[^ ]*\.(pgy\.in|pinggy\.link|pinggy\.io):[0-9]+" | ForEach-Object { $_.Matches.Value } | Select-Object -First 1
           
           $user = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name.Split('\')[1]
