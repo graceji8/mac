@@ -37,14 +37,12 @@ jobs:
         run: |
           # Install tunneling tools
           winget install --id Cloudflare.cloudflared --exact --accept-package-agreements --accept-source-agreements --silent
-          
-          # Setup VS Code Server
-          Invoke-WebRequest -Uri "https://code-server.dev/install.sh" -OutFile "install-code-server.sh"
-          # Since install.sh is for linux, we use the windows binary or winget for code-server if available, 
-          # otherwise we can use 'code' (VS Code) itself with 'code tunnel'
-          
+
           Write-Host "Installing VS Code..."
           winget install --id Microsoft.VisualStudioCode --exact --accept-package-agreements --accept-source-agreements --silent
+          # Refresh PATH so 'code' is available in subsequent steps
+          $env:PATH = [System.Environment]::GetEnvironmentVariable('PATH', 'Machine') + ';' + [System.Environment]::GetEnvironmentVariable('PATH', 'User')
+          Write-Host "code.exe location: $(Get-Command code.exe -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source)"
 
       - name: Setup Tailscale
         if: env.TAILSCALE_AUTHKEY != ''
@@ -61,13 +59,22 @@ jobs:
           if (!(Test-Path "logs")) { New-Item -ItemType Directory -Path "logs" }
 
           # Start VS Code Tunnel - creates a browser-accessible IDE at https://vscode.dev/tunnel/mac-runner
-          # Requires GitHub device auth on first run, but $GITHUB_TOKEN can auto-auth it
+          # Requires GitHub device auth on first run (prints device code to log)
           $env:VSCODE_CLI_USE_FILE_KEYCHAIN = "1"
-          Start-Process code -ArgumentList "tunnel", "--accept-server-license-terms", "--name", "mac-runner" -RedirectStandardOutput "logs/vscode_tunnel.log" -RedirectStandardError "logs/vscode_tunnel_err.log" -NoNewWindow
-          Write-Host "VS Code tunnel starting... URL will be: https://vscode.dev/tunnel/mac-runner"
-          Start-Sleep -Seconds 5
+          # Refresh PATH so winget-installed code.exe is found
+          $env:PATH = [System.Environment]::GetEnvironmentVariable('PATH', 'Machine') + ';' + [System.Environment]::GetEnvironmentVariable('PATH', 'User')
+          $codePath = Get-Command code.cmd -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source
+          if (!$codePath) { $codePath = "${env:LOCALAPPDATA}\Programs\Microsoft VS Code\bin\code.cmd" }
+          if (!$codePath) { $codePath = "C:\Program Files\Microsoft VS Code\bin\code.cmd" }
+          Write-Host "Using code at: $codePath"
+          try {
+              Start-Process cmd -ArgumentList "/c", "`"$codePath`" tunnel --accept-server-license-terms --name mac-runner >> logs\vscode_tunnel.log 2>&1" -NoNewWindow
+              Write-Host "VS Code tunnel starting... URL: https://vscode.dev/tunnel/mac-runner"
+              Start-Sleep -Seconds 8
+          } catch {
+              Write-Host "VS Code tunnel failed to start: $_"
+          }
           # Show VS Code tunnel log for debug
-          if (Test-Path "logs/vscode_tunnel_err.log") { Get-Content "logs/vscode_tunnel_err.log" }
           if (Test-Path "logs/vscode_tunnel.log") { Get-Content "logs/vscode_tunnel.log" }
           
           # Setup SSH Tunnel via Pinggy using .NET async output reading
