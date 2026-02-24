@@ -48,19 +48,16 @@ jobs:
       - name: Setup TigerVNC
         shell: pwsh
         run: |
-          $ProgressPreference = 'SilentlyContinue'
           $vncDir = "C:\vnc"
           if (-not (Test-Path $vncDir)) { New-Item -ItemType Directory -Path $vncDir | Out-Null }
           
-          # Download standalone WinVNC
-          $release = Invoke-RestMethod -Uri "https://api.github.com/repos/TigerVNC/tigervnc/releases/latest"
-          $asset = $release.assets | Where-Object { $_.name -match "winvnc-x64-.*\.exe$" } | Select-Object -First 1
-          if ($asset) {
-              Write-Host "Downloading TigerVNC: $($asset.browser_download_url)"
-              Invoke-WebRequest -Uri $asset.browser_download_url -OutFile "$vncDir\winvnc.exe"
-          } else {
-              throw "TigerVNC asset not found"
-          }
+          # Download standalone WinVNC from SourceForge (GitHub assets are empty)
+          $vncUrl = "https://downloads.sourceforge.net/project/tigervnc/stable/1.13.1/winvnc-x64-1.13.1.exe"
+          Write-Host "Downloading TigerVNC from SourceForge: $vncUrl"
+          [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+          Invoke-WebRequest -Uri $vncUrl -OutFile "$vncDir\winvnc.exe" -MaximumRedirection 10
+          
+          if (-not (Test-Path "$vncDir\winvnc.exe")) { throw "TigerVNC download failed" }
 
           # Configure via Registry
           $vncPass = if ($env:VNC_PASSWORD) { $env:VNC_PASSWORD } else { "vnc12345" }
