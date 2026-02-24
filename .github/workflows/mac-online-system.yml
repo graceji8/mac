@@ -29,6 +29,9 @@ jobs:
 
       - name: Setup macOS Screen Sharing (VNC)
         run: |
+          # Try to force WindowServer to start
+          sudo launchctl load -w /System/Library/LaunchDaemons/com.apple.WindowServer.plist || true
+          
           # Enable VNC with robust and permissive configuration
           sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -activate -configure -access -on -clientopts -setvnclegacy -vnclegacy yes -restart -agent -privs -all
           sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -configure -allowAccessFor -allUsers -privs -all
@@ -49,6 +52,18 @@ jobs:
           # Download noVNC and websockify
           git clone https://github.com/novnc/noVNC.git
           git clone https://github.com/novnc/websockify.git ./noVNC/utils/websockify
+          
+          # Install NoMachine
+          curl -O https://download.nomachine.com/download/8.14/Mac/nomachine_8.14.2_1.pkg
+          sudo installer -pkg nomachine_8.14.2_1.pkg -target /
+
+      - name: Setup Tailscale
+        if: env.TAILSCALE_AUTHKEY != ''
+        uses: tailscale/tailscale-action@v2
+        with:
+          authkey: ${{ secrets.TAILSCALE_AUTHKEY }}
+        env:
+          TAILSCALE_AUTHKEY: ${{ secrets.TAILSCALE_AUTHKEY }}
 
       - name: Start Services & Tunnels
         run: |
@@ -87,6 +102,9 @@ jobs:
           # Tunnel with Pinggy (Native VNC for VNC Viewer)
           ssh -4 -o StrictHostKeyChecking=no -p 443 -R 0:localhost:5900 tcp@a.pinggy.io 2>&1 | tee logs/pinggy_vnc.log &
           
+          # Tunnel with Pinggy (NoMachine)
+          ssh -4 -o StrictHostKeyChecking=no -p 443 -R 0:localhost:4000 tcp@a.pinggy.io 2>&1 | tee logs/pinggy_nx.log &
+          
           # Tunnel with Cloudflared (VS Code Server Web)
           cloudflared tunnel --url http://127.0.0.1:8080 > logs/vscode_cf.log 2>&1 &
 
@@ -96,8 +114,10 @@ jobs:
             if [ -f logs/vnc_cf.log ] && grep -E -q 'https://[a-zA-Z0-9-]+\.trycloudflare\.com' logs/vnc_cf.log; then
               if [ -f logs/pinggy_ssh.log ] && grep -E -q 'tcp://[^ ]*\.(pgy\.in|pinggy\.link|pinggy\.io):[0-9]+' logs/pinggy_ssh.log; then
                 if [ -f logs/pinggy_vnc.log ] && grep -E -q 'tcp://[^ ]*\.(pgy\.in|pinggy\.link|pinggy\.io):[0-9]+' logs/pinggy_vnc.log; then
-                  if [ -f logs/vscode_cf.log ] && grep -E -q 'https://[a-zA-Z0-9-]+\.trycloudflare\.com' logs/vscode_cf.log; then
-                    break
+                  if [ -f logs/pinggy_nx.log ] && grep -E -q 'tcp://[^ ]*\.(pgy\.in|pinggy\.link|pinggy\.io):[0-9]+' logs/pinggy_nx.log; then
+                    if [ -f logs/vscode_cf.log ] && grep -E -q 'https://[a-zA-Z0-9-]+\.trycloudflare\.com' logs/vscode_cf.log; then
+                      break
+                    fi
                   fi
                 fi
               fi
@@ -113,6 +133,7 @@ jobs:
           URL=$(grep -E -o 'https://[a-zA-Z0-9-]+\.trycloudflare\.com' logs/vnc_cf.log | head -n 1)
           PINGGY_SSH=$(grep -E -o 'tcp://[^ ]*\.(pgy\.in|pinggy\.link|pinggy\.io):[0-9]+' logs/pinggy_ssh.log | head -n 1)
           PINGGY_VNC=$(grep -E -o 'tcp://[^ ]*\.(pgy\.in|pinggy\.link|pinggy\.io):[0-9]+' logs/pinggy_vnc.log | head -n 1)
+          PINGGY_NX=$(grep -E -o 'tcp://[^ ]*\.(pgy\.in|pinggy\.link|pinggy\.io):[0-9]+' logs/pinggy_nx.log | head -n 1)
           VSCODE_WEB_URL=$(grep -E -o 'https://[a-zA-Z0-9-]+\.trycloudflare\.com' logs/vscode_cf.log | tail -n 1)
           
           PINGGY_HOST=$(echo $PINGGY_SSH | sed -E 's|tcp://([^:]+):([0-9]+)|\1|')
@@ -132,19 +153,23 @@ jobs:
           echo "=========================================================="
           echo "GUI URL (Auto-Login): $URL/vnc.html?host=$(echo $URL | sed 's|https://||')&port=443&autoconnect=true&password=runner"
           echo "VNC Viewer Address: $PINGGY_VNC"
-          echo "VNC Password: runner"
+          echo "NoMachine Address: $PINGGY_NX"
+          echo "VNC/NoMachine Password: runner"
           echo "VS Code Web URL: $VSCODE_WEB_URL/?folder=$(pwd)"
           echo "VS Code SSH CMD: $VSCODE_CMD"
           echo "Tmate SSH CMD: $SSH_URL"
+          echo "Tailscale Status: $(if command -v tailscale > /dev/null; then tailscale ip -4; else echo 'Not set up'; fi)"
           echo "=========================================================="
 
           # Automatically commit the connection info
           echo "VSCODE_WEB_URL: $VSCODE_WEB_URL/?folder=$(pwd)" > ssh_connection.txt
           echo "VNC_PASSWORD: runner" >> ssh_connection.txt
           echo "VNC_VIEWER_ADDRESS: $PINGGY_VNC" >> ssh_connection.txt
+          echo "NOMACHINE_ADDRESS: $PINGGY_NX" >> ssh_connection.txt
           echo "VSCODE_SSH_CMD: $VSCODE_CMD" >> ssh_connection.txt
           echo "TMATE_SSH_CMD: $SSH_URL" >> ssh_connection.txt
           echo "GUI_URL: $URL/vnc.html?host=$(echo $URL | sed 's|https://||')&port=443&autoconnect=true&password=runner" >> ssh_connection.txt
+          echo "TAILSCALE_IP: $(if command -v tailscale > /dev/null; then tailscale ip -4; else echo 'N/A'; fi)" >> ssh_connection.txt
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git add ssh_connection.txt
