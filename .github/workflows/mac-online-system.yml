@@ -59,7 +59,7 @@ jobs:
 
       - name: Setup Tailscale
         if: env.TAILSCALE_AUTHKEY != ''
-        uses: tailscale/tailscale-action@v2
+        uses: tailscale/github-action@v3
         with:
           authkey: ${{ secrets.TAILSCALE_AUTHKEY }}
         env:
