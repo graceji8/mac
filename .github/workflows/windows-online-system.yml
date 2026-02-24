@@ -59,60 +59,48 @@ jobs:
           if (!(Test-Path "logs")) { New-Item -ItemType Directory -Path "logs" }
 
           # Start VS Code Tunnel - creates a browser-accessible IDE at https://vscode.dev/tunnel/mac-runner
-          # Requires GitHub device auth on first run (prints device code to log)
           $env:VSCODE_CLI_USE_FILE_KEYCHAIN = "1"
           # Refresh PATH so winget-installed code.exe is found
           $env:PATH = [System.Environment]::GetEnvironmentVariable('PATH', 'Machine') + ';' + [System.Environment]::GetEnvironmentVariable('PATH', 'User')
           $codePath = Get-Command code.cmd -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source
           if (!$codePath) { $codePath = "${env:LOCALAPPDATA}\Programs\Microsoft VS Code\bin\code.cmd" }
-          if (!$codePath) { $codePath = "C:\Program Files\Microsoft VS Code\bin\code.cmd" }
+          if (!(Test-Path $codePath)) { $codePath = "C:\Program Files\Microsoft VS Code\bin\code.cmd" }
           Write-Host "Using code at: $codePath"
           try {
+              # Pre-login with GITHUB_TOKEN to skip interactive device auth
+              Write-Host "Logging into VS Code tunnel with GITHUB_TOKEN..."
+              & cmd /c "`"$codePath`" tunnel user login --provider github --access-token ${{ secrets.GITHUB_TOKEN }} 2>&1"
+              # Start the tunnel in background
               Start-Process cmd -ArgumentList "/c", "`"$codePath`" tunnel --accept-server-license-terms --name mac-runner >> logs\vscode_tunnel.log 2>&1" -NoNewWindow
               Write-Host "VS Code tunnel starting... URL: https://vscode.dev/tunnel/mac-runner"
               Start-Sleep -Seconds 8
           } catch {
-              Write-Host "VS Code tunnel failed to start: $_"
+              Write-Host "VS Code tunnel failed: $_"
           }
           # Show VS Code tunnel log for debug
           if (Test-Path "logs/vscode_tunnel.log") { Get-Content "logs/vscode_tunnel.log" }
           
-          # Setup SSH Tunnel via Pinggy using .NET async output reading
-          # This is the only reliable way to capture both stdout+stderr from a long-running process in PowerShell
-          $logFile = "logs/pinggy_ssh.log"
-          "" | Out-File $logFile  # Pre-create empty log file
-
-          $pinfo = New-Object System.Diagnostics.ProcessStartInfo
-          $pinfo.FileName = "ssh"
-          $pinfo.Arguments = "-4 -o StrictHostKeyChecking=no -p 443 -R 0:localhost:22 tcp@a.pinggy.io"
-          $pinfo.RedirectStandardOutput = $true
-          $pinfo.RedirectStandardError = $true
-          $pinfo.UseShellExecute = $false
-          $pinfo.CreateNoWindow = $true
-
-          $proc = New-Object System.Diagnostics.Process
-          $proc.StartInfo = $pinfo
-
-          # Event handler appends both streams to the same log file
+          # Setup SSH Tunnel via Pinggy using a background PowerShell job
+          # Background jobs have their own scope so we avoid $using: issues with .NET event handlers
           $sshLogPath = (Get-Item .).FullName + "\logs\pinggy_ssh.log"
-          $onData = [System.Diagnostics.DataReceivedEventHandler] {
-              param($s, $e)
-              if ($e.Data) { Add-Content -Path $using:sshLogPath -Value $e.Data }
-          }
-          $proc.add_OutputDataReceived($onData)
-          $proc.add_ErrorDataReceived($onData)
-
-          $proc.Start() | Out-Null
-          $proc.BeginOutputReadLine()
-          $proc.BeginErrorReadLine()
+          $sshJob = Start-Job -ScriptBlock {
+              param($log)
+              & ssh -4 -o StrictHostKeyChecking=no -p 443 -R 0:localhost:22 tcp@a.pinggy.io 2>&1 | ForEach-Object {
+                  Add-Content -Path $log -Value $_
+                  $_
+              }
+          } -ArgumentList $sshLogPath
 
           # Wait for the tunnel URL to appear in the log
           Write-Host "Waiting for tunnel URL..."
+          $logFile = $sshLogPath
+          "" | Out-File $logFile   # pre-create
           $timeout = 45
           $counter = 0
           while ($counter -lt $timeout) {
               Start-Sleep -Seconds 2
               $counter += 2
+              Receive-Job $sshJob -Keep | Out-Null  # flush job output to log
               if (Test-Path $logFile) {
                   $content = Get-Content $logFile -Raw -ErrorAction SilentlyContinue
                   if ($content -and ($content -match "tcp://" -or $content -match "pgy\.in" -or $content -match "pinggy")) {
@@ -121,12 +109,12 @@ jobs:
               }
           }
 
-          # Debug: Show the full log so we can see exactly what Pinggy output
+          # Debug: Show full log
           Write-Host "--- Debug: Tunnel Log Content ---"
           if (Test-Path $logFile) { Get-Content $logFile } else { Write-Host "Log file not found." }
           Write-Host "--------------------------------"
 
-          $PINGGY_SSH = Select-String -Path $logFile -Pattern "tcp://[^ ]*\.(pgy\.in|pinggy\.link|pinggy\.io):[0-9]+" | ForEach-Object { $_.Matches.Value } | Select-Object -First 1
+          $PINGGY_SSH = Select-String -Path $logFile -Pattern "tcp://[^ ]*\.(pgy\.in|pinggy\.link|pinggy\.io):[0-9]+" -ErrorAction SilentlyContinue | ForEach-Object { $_.Matches.Value } | Select-Object -First 1
 
           Write-Host "=========================================================="
           Write-Host "SSH Address: $PINGGY_SSH"
