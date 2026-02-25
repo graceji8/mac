@@ -89,10 +89,26 @@ jobs:
       - name: Setup code-server
         shell: pwsh
         run: |
-          npm install -g code-server 2>&1 | Select-Object -Last 3
+          $prefix = (npm config get prefix)
+          $env:PATH = "$prefix;$env:PATH"
+          
+          Write-Host "Checking if code-server is already installed..."
+          if (-not (Get-Command code-server -ErrorAction SilentlyContinue)) {
+              Write-Host "Installing code-server global package..."
+              # Use --force to overcome EBUSY/lock issues
+              npm install -g code-server --force 2>&1 | Select-Object -Last 3
+          }
+
           $csPass = if ($env:CODESERVER_PASSWORD) { $env:CODESERVER_PASSWORD } else { "code12345" }
           $env:PASSWORD = $csPass
-          Start-Process code-server -ArgumentList "--bind-addr 0.0.0.0:8080 --auth password --disable-telemetry `"$env:GITHUB_WORKSPACE`"" -RedirectStandardOutput "$env:TEMP\codeserver.out.log" -RedirectStandardError "$env:TEMP\codeserver.err.log" -WindowStyle Hidden
+          
+          # Resolve code-server path again after install
+          $csCmd = Get-Command code-server -ErrorAction SilentlyContinue
+          if (-not $csCmd) { throw "code-server not found in PATH" }
+          
+          Write-Host "Starting code-server from: $($csCmd.Source)"
+          # Use 'cmd /c' to execute the .cmd shim correctly
+          Start-Process cmd -ArgumentList "/c", "`"$($csCmd.Source)`" --bind-addr 0.0.0.0:8080 --auth password --disable-telemetry `"$env:GITHUB_WORKSPACE`"" -RedirectStandardOutput "$env:TEMP\codeserver.out.log" -RedirectStandardError "$env:TEMP\codeserver.err.log" -WindowStyle Hidden
         env:
           CODESERVER_PASSWORD: ${{ secrets.CODESERVER_PASSWORD }}
 
