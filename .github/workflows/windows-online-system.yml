@@ -80,27 +80,18 @@ jobs:
           # Show VS Code tunnel log for debug
           if (Test-Path "logs/vscode_tunnel.log") { Get-Content "logs/vscode_tunnel.log" }
           
-          # Setup SSH Tunnel via Pinggy using a background PowerShell job
-          # Background jobs have their own scope so we avoid $using: issues with .NET event handlers
+          # Setup SSH Tunnel via Pinggy using an independent background process
           $sshLogPath = (Get-Item .).FullName + "\logs\pinggy_ssh.log"
-          $sshJob = Start-Job -ScriptBlock {
-              param($log)
-              & ssh -4 -o StrictHostKeyChecking=no -p 443 -R 0:localhost:22 tcp@a.pinggy.io 2>&1 | ForEach-Object {
-                  Add-Content -Path $log -Value $_
-                  $_
-              }
-          } -ArgumentList $sshLogPath
+          Start-Process ssh -ArgumentList "-4 -o StrictHostKeyChecking=no -p 443 -R 0:localhost:22 tcp@a.pinggy.io" -RedirectStandardOutput $sshLogPath -RedirectStandardError $sshLogPath -WindowStyle Hidden
 
           # Wait for the tunnel URL to appear in the log
           Write-Host "Waiting for tunnel URL..."
           $logFile = $sshLogPath
-          "" | Out-File $logFile   # pre-create
           $timeout = 45
           $counter = 0
           while ($counter -lt $timeout) {
               Start-Sleep -Seconds 2
               $counter += 2
-              Receive-Job $sshJob -Keep | Out-Null  # flush job output to log
               if (Test-Path $logFile) {
                   $content = Get-Content $logFile -Raw -ErrorAction SilentlyContinue
                   if ($content -and ($content -match "tcp://" -or $content -match "pgy\.in" -or $content -match "pinggy")) {
