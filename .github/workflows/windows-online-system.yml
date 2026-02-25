@@ -83,7 +83,7 @@ jobs:
           # Setup SSH Tunnel via Pinggy using an independent background process
           $sshLogPath = (Get-Item .).FullName + "\logs\pinggy_ssh.log"
           $sshLogErrPath = (Get-Item .).FullName + "\logs\pinggy_ssh_err.log"
-          Start-Process ssh -ArgumentList "-4 -o StrictHostKeyChecking=no -p 443 -R 0:localhost:22 tcp@a.pinggy.io" -RedirectStandardOutput $sshLogPath -RedirectStandardError $sshLogErrPath -WindowStyle Hidden
+          Start-Process ssh -ArgumentList "-T -4 -o StrictHostKeyChecking=no -p 443 -R 0:localhost:22 tcp@a.pinggy.io" -RedirectStandardOutput $sshLogPath -RedirectStandardError $sshLogErrPath -WindowStyle Hidden
 
           # Wait for the tunnel URL to appear in the log
           Write-Host "Waiting for tunnel URL..."

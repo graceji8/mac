@@ -98,18 +98,11 @@ jobs:
           npm install code-server --no-save --quiet
           
           $binDir = Join-Path $csDir "node_modules\.bin"
-          $shims = Get-ChildItem -Path $binDir -Filter "code-server*"
+          $csShim = Join-Path $binDir "code-server.cmd"
+          if (-not (Test-Path $csShim)) { $csShim = Join-Path $binDir "code-server.ps1" }
+          if (-not (Test-Path $csShim)) { $csShim = Join-Path $binDir "code-server" }
           
-          # Prioritize shims that Windows can execute natively
-          $csShim = ($shims | Where-Object { $_.Extension -eq ".cmd" } | Select-Object -ExpandProperty FullName -First 1)
-          if (-not $csShim) {
-              $csShim = ($shims | Where-Object { $_.Extension -eq ".ps1" } | Select-Object -ExpandProperty FullName -First 1)
-          }
-          if (-not $csShim) {
-              $csShim = ($shims | Select-Object -ExpandProperty FullName -First 1)
-          }
-          
-          if (-not $csShim) { throw "code-server installation failed - shim not found in $binDir" }
+          if (-not (Test-Path $csShim)) { throw "code-server installation failed - shim not found in $binDir" }
           Write-Host "code-server shim found at: $csShim"
 
           $csPass = if ($env:CODESERVER_PASSWORD) { $env:CODESERVER_PASSWORD } else { "code12345" }
@@ -117,15 +110,13 @@ jobs:
           
           $args = "--bind-addr 127.0.0.1:8080 --auth password --disable-telemetry `"$env:GITHUB_WORKSPACE`""
           
-          if ($csShim.EndsWith(".ps1")) {
-              Write-Host "Starting code-server (PS1) via powershell..."
-              Start-Process powershell -ArgumentList "-ExecutionPolicy Bypass -File `"$csShim`" $args" -RedirectStandardOutput "$env:TEMP\codeserver.out.log" -RedirectStandardError "$env:TEMP\codeserver.err.log" -WindowStyle Hidden
-          } elseif ($csShim.EndsWith(".cmd")) {
-              Write-Host "Starting code-server (CMD) via cmd /c..."
+          Write-Host "Starting code-server via explicit shim path..."
+          if ($csShim.EndsWith(".cmd")) {
               Start-Process cmd -ArgumentList "/c", "`"$csShim`" $args" -RedirectStandardOutput "$env:TEMP\codeserver.out.log" -RedirectStandardError "$env:TEMP\codeserver.err.log" -WindowStyle Hidden
+          } elseif ($csShim.EndsWith(".ps1")) {
+              Start-Process powershell -ArgumentList "-ExecutionPolicy Bypass -File `"$csShim`" $args" -RedirectStandardOutput "$env:TEMP\codeserver.out.log" -RedirectStandardError "$env:TEMP\codeserver.err.log" -WindowStyle Hidden
           } else {
-              Write-Host "Starting code-server (Direct)..."
-              Start-Process $csShim -ArgumentList $args -RedirectStandardOutput "$env:TEMP\codeserver.out.log" -RedirectStandardError "$env:TEMP\codeserver.err.log" -WindowStyle Hidden
+              Start-Process cmd -ArgumentList "/c node `"$csShim`" $args" -RedirectStandardOutput "$env:TEMP\codeserver.out.log" -RedirectStandardError "$env:TEMP\codeserver.err.log" -WindowStyle Hidden
           }
           
           Set-Location $env:GITHUB_WORKSPACE
@@ -138,8 +129,8 @@ jobs:
         run: |
           $cf = "$env:TEMP\cloudflared.exe"
           Invoke-WebRequest -Uri "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe" -OutFile $cf
-          Start-Process $cf -ArgumentList "tunnel --url http://localhost:6080 --no-autoupdate" -RedirectStandardOutput "$env:TEMP\cf-novnc.out.log" -RedirectStandardError "$env:TEMP\cf-novnc.err.log" -WindowStyle Hidden
-          Start-Process $cf -ArgumentList "tunnel --url http://localhost:8080 --no-autoupdate" -RedirectStandardOutput "$env:TEMP\cf-cs.out.log" -RedirectStandardError "$env:TEMP\cf-cs.err.log" -WindowStyle Hidden
+          Start-Process $cf -ArgumentList "tunnel --url http://127.0.0.1:6080 --no-autoupdate" -RedirectStandardOutput "$env:TEMP\cf-novnc.out.log" -RedirectStandardError "$env:TEMP\cf-novnc.err.log" -WindowStyle Hidden
+          Start-Process $cf -ArgumentList "tunnel --url http://127.0.0.1:8080 --no-autoupdate" -RedirectStandardOutput "$env:TEMP\cf-cs.out.log" -RedirectStandardError "$env:TEMP\cf-cs.err.log" -WindowStyle Hidden
 
       # ── 5. Pinggy TCP Tunnel (RDP) ──────────────────────────────────────────
       - name: Start Pinggy Tunnel
@@ -147,7 +138,7 @@ jobs:
         run: |
           $logRdp = "$env:TEMP\pinggy_rdp.log"
           $logRdpErr = "$env:TEMP\pinggy_rdp_err.log"
-          Start-Process ssh -ArgumentList "-4 -o StrictHostKeyChecking=no -p 443 -R 0:localhost:3389 tcp@a.pinggy.io" -RedirectStandardOutput $logRdp -RedirectStandardError $logRdpErr -WindowStyle Hidden
+          Start-Process ssh -ArgumentList "-T -4 -o StrictHostKeyChecking=no -p 443 -R 0:localhost:3389 tcp@a.pinggy.io" -RedirectStandardOutput $logRdp -RedirectStandardError $logRdpErr -WindowStyle Hidden
 
       # ── 6. Summary & Connection Details ─────────────────────────────────────
       - name: Connection Summary
@@ -203,6 +194,22 @@ jobs:
           git push origin HEAD:main
         env:
           SESSION_PASSWORD: ${{ secrets.SESSION_PASSWORD }}
+
+      # ── 6.5 Debug Logs ──────────────────────────────────────────────────────
+      - name: Debug Logs
+        if: always()
+        shell: pwsh
+        run: |
+          Write-Host "--- pinggy_rdp.log ---"
+          if (Test-Path "$env:TEMP\pinggy_rdp.log") { Get-Content "$env:TEMP\pinggy_rdp.log" }
+          Write-Host "`n--- pinggy_rdp_err.log ---"
+          if (Test-Path "$env:TEMP\pinggy_rdp_err.log") { Get-Content "$env:TEMP\pinggy_rdp_err.log" }
+          Write-Host "`n--- codeserver.err.log ---"
+          if (Test-Path "$env:TEMP\codeserver.err.log") { Get-Content "$env:TEMP\codeserver.err.log" }
+          Write-Host "`n--- codeserver.out.log ---"
+          if (Test-Path "$env:TEMP\codeserver.out.log") { Get-Content "$env:TEMP\codeserver.out.log" }
+          Write-Host "`n--- cf-cs.err.log ---"
+          if (Test-Path "$env:TEMP\cf-cs.err.log") { Get-Content "$env:TEMP\cf-cs.err.log" }
 
       # ── 7. Keep Session Alive ───────────────────────────────────────────────
       - name: Keep session alive
