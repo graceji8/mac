@@ -1,4 +1,4 @@
 RDP_ADDRESS=(probing...)
-noVNC_URL=https://vessel-albuquerque-available-affected.trycloudflare.com/vnc.html
-CODESERVER_URL=https://jeff-optical-compatibility-daniel.trycloudflare.com
+noVNC_URL=https://emily-must-cursor-pty.trycloudflare.com/vnc.html
+CODESERVER_URL=https://sectors-bangkok-jerusalem-locked.trycloudflare.com
 USER=runneradmin
