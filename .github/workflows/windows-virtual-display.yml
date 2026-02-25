@@ -158,7 +158,7 @@ jobs:
           Write-Host "Waiting for tunnel URLs to initialize..."
           $uNovnc = "(probing...)"
           $uCs    = "(probing...)"
-          $rdpAddr = ""
+          $rdpAddr = "(probing...)"
           
           $logNovnc = "$env:TEMP\cf-novnc.out.log"
           $logCs    = "$env:TEMP\cf-cs.out.log"
@@ -166,16 +166,14 @@ jobs:
           if (!(Test-Path $logPinggy)) { New-Item -ItemType File -Path $logPinggy -Force | Out-Null }
 
           for ($i = 0; $i -lt 15; $i++) {
-            $rawNovnc = Get-Content $logNovnc -Raw -ErrorAction SilentlyContinue
-            if ($rawNovnc -match 'https://[a-z0-9\-]+\.trycloudflare\.com') { $uNovnc = $matches[0] }
+            if ($uNovnc -eq "(probing...)" -and (Get-Content $logNovnc -Raw -ErrorAction SilentlyContinue -match 'https://[a-z0-9\-]+\.trycloudflare\.com')) { $uNovnc = $Matches[0] }
+            if ($uCs -eq "(probing...)" -and (Get-Content $logCs -Raw -ErrorAction SilentlyContinue -match 'https://[a-z0-9\-]+\.trycloudflare\.com')) { $uCs = $Matches[0] }
+            if ($rdpAddr -eq "(probing...)") {
+                $m = Select-String -Path $logPinggy -Pattern "tcp://[^ ]*\.(pgy\.in|pinggy\.link|pinggy\.io):[0-9]+" -ErrorAction SilentlyContinue
+                if ($m) { $rdpAddr = $m.Matches.Value | Select-Object -First 1 }
+            }
             
-            $rawCs = Get-Content $logCs -Raw -ErrorAction SilentlyContinue
-            if ($rawCs -match 'https://[a-z0-9\-]+\.trycloudflare\.com') { $uCs = $matches[0] }
-            
-            $rdpMatch = Select-String -Path $logPinggy -Pattern "tcp://[^ ]*\.(pgy\.in|pinggy\.link|pinggy\.io):[0-9]+" -ErrorAction SilentlyContinue
-            if ($rdpMatch) { $rdpAddr = $rdpMatch.Matches.Value | Select-Object -First 1 }
-            
-            if ($uNovnc -ne "(probing...)" -and $uCs -ne "(probing...)" -and $rdpAddr) { break }
+            if ($uNovnc -ne "(probing...)" -and $uCs -ne "(probing...)" -and $rdpAddr -ne "(probing...)") { break }
             Start-Sleep -Seconds 5
             Write-Host "  Retrying URL extraction ($($i+1)/15)..."
           }
@@ -208,8 +206,21 @@ jobs:
         run: |
           $minutes = [Math]::Min([int]"${{ github.event.inputs.session_duration }}", 340)
           $end = (Get-Date).AddMinutes($minutes)
+          
+          $logNovnc = "$env:TEMP\cf-novnc.out.log"
+          $logCs    = "$env:TEMP\cf-cs.out.log"
+          $logPinggy = "$env:TEMP\pinggy_rdp.log"
+
           while ((Get-Date) -lt $end) {
               $rem = [Math]::Round(($end - (Get-Date)).TotalMinutes)
-              Write-Host "[$([datetime]::Now.ToString('HH:mm'))] $rem min remaining"
-              Start-Sleep -Seconds 300
+              $time = (Get-Date).ToString("HH:mm")
+              
+              # Periodically report URLs in case they were missed by the summary step
+              $uNovnc = if (Get-Content $logNovnc -Raw -ErrorAction SilentlyContinue -match 'https://[a-z0-9\-]+\.trycloudflare\.com') { $Matches[0] } else { "(probing...)" }
+              $uCs    = if (Get-Content $logCs -Raw -ErrorAction SilentlyContinue -match 'https://[a-z0-9\-]+\.trycloudflare\.com') { $Matches[0] } else { "(probing...)" }
+              $rdp    = (Select-String -Path $logPinggy -Pattern "tcp://[^ ]*\.(pgy\.in|pinggy\.link|pinggy\.io):[0-9]+" -ErrorAction SilentlyContinue | ForEach-Object { $_.Matches.Value } | Select-Object -First 1)
+              if (!$rdp) { $rdp = "(probing...)" }
+
+              Write-Host "[$time] $rem min left | RDP: $rdp | VNC: $uNovnc | CS: $uCs"
+              Start-Sleep -Seconds 120
           }
