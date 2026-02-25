@@ -1,4 +1,4 @@
 RDP_ADDRESS=(probing...)
 noVNC_URL=(probing...)/vnc.html
-CODESERVER_URL=(probing...)
+CODESERVER_URL=https://construction-sep-coordinated-savannah.trycloudflare.com
 USER=runneradmin
