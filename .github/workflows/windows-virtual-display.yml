@@ -98,7 +98,16 @@ jobs:
           npm install code-server --no-save --quiet
           
           $binDir = Join-Path $csDir "node_modules\.bin"
-          $csShim = Get-ChildItem -Path $binDir -Filter "code-server*" | Select-Object -ExpandProperty FullName -First 1
+          $shims = Get-ChildItem -Path $binDir -Filter "code-server*"
+          
+          # Prioritize shims that Windows can execute natively
+          $csShim = ($shims | Where-Object { $_.Extension -eq ".cmd" } | Select-Object -ExpandProperty FullName -First 1)
+          if (-not $csShim) {
+              $csShim = ($shims | Where-Object { $_.Extension -eq ".ps1" } | Select-Object -ExpandProperty FullName -First 1)
+          }
+          if (-not $csShim) {
+              $csShim = ($shims | Select-Object -ExpandProperty FullName -First 1)
+          }
           
           if (-not $csShim) { throw "code-server installation failed - shim not found in $binDir" }
           Write-Host "code-server shim found at: $csShim"
