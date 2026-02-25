@@ -1,4 +1,4 @@
 RDP_ADDRESS=(probing...)
-noVNC_URL=https://ahpdg-162-156-177-73.a.free.pinggy.link/vnc.html
-CODESERVER_URL=https://tznlx-162-156-177-73.a.free.pinggy.link
+noVNC_URL=https://gzgbq-162-156-177-73.a.free.pinggy.link/vnc.html
+CODESERVER_URL=https://ygmjb-162-156-177-73.a.free.pinggy.link
 USER=runneradmin
