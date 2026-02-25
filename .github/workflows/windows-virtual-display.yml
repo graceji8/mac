@@ -166,7 +166,10 @@ jobs:
 
           $uNovnc = Get-CF-URL "$env:TEMP\cf-novnc.out.log"
           $uCs    = Get-CF-URL "$env:TEMP\cf-cs.out.log"
-          $rdpAddr = Select-String -Path "$env:TEMP\pinggy_rdp.log" -Pattern "tcp://[^ ]*\.(pgy\.in|pinggy\.link|pinggy\.io):[0-9]+" | ForEach-Object { $_.Matches.Value } | Select-Object -First 1
+          
+          $logPinggy = "$env:TEMP\pinggy_rdp.log"
+          if (!(Test-Path $logPinggy)) { New-Item -ItemType File -Path $logPinggy -Force | Out-Null }
+          $rdpAddr = Select-String -Path $logPinggy -Pattern "tcp://[^ ]*\.(pgy\.in|pinggy\.link|pinggy\.io):[0-9]+" -ErrorAction SilentlyContinue | ForEach-Object { $_.Matches.Value } | Select-Object -First 1
           
           $user = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name.Split('\')[1]
           $pass = if ($env:SESSION_PASSWORD) { $env:SESSION_PASSWORD } else { "Admin@Runner_2026_Complex!" }
