@@ -89,26 +89,37 @@ jobs:
       - name: Setup code-server
         shell: pwsh
         run: |
-          $prefix = (npm config get prefix)
-          $env:PATH = "$prefix;$env:PATH"
+          $csDir = Join-Path $env:RUNNER_TEMP "cs-install"
+          if (!(Test-Path $csDir)) { New-Item -ItemType Directory -Path $csDir }
           
-          Write-Host "Checking if code-server is already installed..."
-          if (-not (Get-Command code-server -ErrorAction SilentlyContinue)) {
-              Write-Host "Installing code-server global package..."
-              # Use --force to overcome EBUSY/lock issues
-              npm install -g code-server --force 2>&1 | Select-Object -Last 3
-          }
+          Write-Host "Installing code-server locally in $csDir..."
+          Set-Location $csDir
+          # Install locally to avoid EBUSY on global prefix
+          npm install code-server --no-save --quiet
+          
+          $binDir = Join-Path $csDir "node_modules\.bin"
+          $csShim = Get-ChildItem -Path $binDir -Filter "code-server*" | Select-Object -ExpandProperty FullName -First 1
+          
+          if (-not $csShim) { throw "code-server installation failed - shim not found in $binDir" }
+          Write-Host "code-server shim found at: $csShim"
 
           $csPass = if ($env:CODESERVER_PASSWORD) { $env:CODESERVER_PASSWORD } else { "code12345" }
           $env:PASSWORD = $csPass
           
-          # Resolve code-server path again after install
-          $csCmd = Get-Command code-server -ErrorAction SilentlyContinue
-          if (-not $csCmd) { throw "code-server not found in PATH" }
+          $args = "--bind-addr 0.0.0.0:8080 --auth password --disable-telemetry `"$env:GITHUB_WORKSPACE`""
           
-          Write-Host "Starting code-server from: $($csCmd.Source)"
-          # Use 'cmd /c' to execute the .cmd shim correctly
-          Start-Process cmd -ArgumentList "/c", "`"$($csCmd.Source)`" --bind-addr 0.0.0.0:8080 --auth password --disable-telemetry `"$env:GITHUB_WORKSPACE`"" -RedirectStandardOutput "$env:TEMP\codeserver.out.log" -RedirectStandardError "$env:TEMP\codeserver.err.log" -WindowStyle Hidden
+          if ($csShim.EndsWith(".ps1")) {
+              Write-Host "Starting code-server (PS1) via powershell..."
+              Start-Process powershell -ArgumentList "-ExecutionPolicy Bypass -File `"$csShim`" $args" -RedirectStandardOutput "$env:TEMP\codeserver.out.log" -RedirectStandardError "$env:TEMP\codeserver.err.log" -WindowStyle Hidden
+          } elseif ($csShim.EndsWith(".cmd")) {
+              Write-Host "Starting code-server (CMD) via cmd /c..."
+              Start-Process cmd -ArgumentList "/c", "`"$csShim`" $args" -RedirectStandardOutput "$env:TEMP\codeserver.out.log" -RedirectStandardError "$env:TEMP\codeserver.err.log" -WindowStyle Hidden
+          } else {
+              Write-Host "Starting code-server (Direct)..."
+              Start-Process $csShim -ArgumentList $args -RedirectStandardOutput "$env:TEMP\codeserver.out.log" -RedirectStandardError "$env:TEMP\codeserver.err.log" -WindowStyle Hidden
+          }
+          
+          Set-Location $env:GITHUB_WORKSPACE
         env:
           CODESERVER_PASSWORD: ${{ secrets.CODESERVER_PASSWORD }}
 
