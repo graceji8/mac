@@ -1,5 +1,4 @@
-﻿RDP_ADDRESS=(probing...)
-noVNC_URL=https://qhvkj-162-156-177-73.a.free.pinggy.link/vnc.html
-CODESERVER_URL=https://tzjib-162-156-177-73.a.free.pinggy.link
+RDP_ADDRESS=(probing...)
+noVNC_URL=https://labor-biotechnology-cheers-claimed.trycloudflare.com/vnc.html
+CODESERVER_URL=https://quebec-subject-harder-range.trycloudflare.com
 USER=runneradmin
-VNC_PASSWORD=None
