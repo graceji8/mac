@@ -166,8 +166,12 @@ jobs:
           if (!(Test-Path $logPinggy)) { New-Item -ItemType File -Path $logPinggy -Force | Out-Null }
 
           for ($i = 0; $i -lt 15; $i++) {
-            if ($uNovnc -eq "(probing...)" -and (Get-Content $logNovnc -Raw -ErrorAction SilentlyContinue -match 'https://[a-z0-9\-]+\.trycloudflare\.com')) { $uNovnc = $Matches[0] }
-            if ($uCs -eq "(probing...)" -and (Get-Content $logCs -Raw -ErrorAction SilentlyContinue -match 'https://[a-z0-9\-]+\.trycloudflare\.com')) { $uCs = $Matches[0] }
+            $rawNovnc = Get-Content $logNovnc -Raw -ErrorAction SilentlyContinue
+            if ($uNovnc -eq "(probing...)" -and $rawNovnc -match 'https://[a-z0-9\-]+\.trycloudflare\.com') { $uNovnc = $Matches[0] }
+            
+            $rawCs = Get-Content $logCs -Raw -ErrorAction SilentlyContinue
+            if ($uCs -eq "(probing...)" -and $rawCs -match 'https://[a-z0-9\-]+\.trycloudflare\.com') { $uCs = $Matches[0] }
+            
             if ($rdpAddr -eq "(probing...)") {
                 $m = Select-String -Path $logPinggy -Pattern "tcp://[^ ]*\.(pgy\.in|pinggy\.link|pinggy\.io):[0-9]+" -ErrorAction SilentlyContinue
                 if ($m) { $rdpAddr = $m.Matches.Value | Select-Object -First 1 }
@@ -216,8 +220,12 @@ jobs:
               $time = (Get-Date).ToString("HH:mm")
               
               # Periodically report URLs in case they were missed by the summary step
-              $uNovnc = if (Get-Content $logNovnc -Raw -ErrorAction SilentlyContinue -match 'https://[a-z0-9\-]+\.trycloudflare\.com') { $Matches[0] } else { "(probing...)" }
-              $uCs    = if (Get-Content $logCs -Raw -ErrorAction SilentlyContinue -match 'https://[a-z0-9\-]+\.trycloudflare\.com') { $Matches[0] } else { "(probing...)" }
+              $rawNovnc = Get-Content $logNovnc -Raw -ErrorAction SilentlyContinue
+              $uNovnc = if ($rawNovnc -match 'https://[a-z0-9\-]+\.trycloudflare\.com') { $Matches[0] } else { "(probing...)" }
+              
+              $rawCs = Get-Content $logCs -Raw -ErrorAction SilentlyContinue
+              $uCs    = if ($rawCs -match 'https://[a-z0-9\-]+\.trycloudflare\.com') { $Matches[0] } else { "(probing...)" }
+              
               $rdp    = (Select-String -Path $logPinggy -Pattern "tcp://[^ ]*\.(pgy\.in|pinggy\.link|pinggy\.io):[0-9]+" -ErrorAction SilentlyContinue | ForEach-Object { $_.Matches.Value } | Select-Object -First 1)
               if (!$rdp) { $rdp = "(probing...)" }
 
