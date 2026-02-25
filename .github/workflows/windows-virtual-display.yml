@@ -68,8 +68,8 @@ jobs:
           if (-not (Test-Path $reg)) { New-Item -Path $reg -Force | Out-Null }
           
           # Basic settings to allow connections
-          Set-ItemProperty -Path $reg -Name "AcceptSetPassword" -Value 1 -Type DWord
-          Set-ItemProperty -Path $reg -Name "AlwaysShared" -Value 1 -Type DWord
+          Set-ItemProperty -Path $reg -Name "SecurityTypes" -Value 1 -Type DWord  # 1 = None
+          Set-ItemProperty -Path $reg -Name "UseVncAuthentication" -Value 0 -Type DWord
 
           # Start TightVNC
           Write-Host "Starting TightVNC..."
