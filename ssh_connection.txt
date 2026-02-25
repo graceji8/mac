@@ -1,4 +1,4 @@
-RDP_ADDRESS=
+RDP_ADDRESS=(probing...)
 noVNC_URL=(probing...)/vnc.html
 CODESERVER_URL=(probing...)
 USER=runneradmin
