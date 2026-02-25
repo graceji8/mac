@@ -1,9 +1,4 @@
 RDP_ADDRESS=(probing...)
-<<<<<<< HEAD
-noVNC_URL=https://sensors-substance-sector-degrees.trycloudflare.com/vnc.html
-CODESERVER_URL=https://prior-stationery-blue-obligation.trycloudflare.com
-=======
-noVNC_URL=https://glasses-specify-edges-conclude.trycloudflare.com/vnc.html
-CODESERVER_URL=(probing...)
->>>>>>> af4e13d73b77f3c1a4c11e4f6d9b69c06743addb
+noVNC_URL=https://cab-trackback-replace-adjusted.trycloudflare.com/vnc.html
+CODESERVER_URL=https://distributions-casey-opposite-tmp.trycloudflare.com
 USER=runneradmin
