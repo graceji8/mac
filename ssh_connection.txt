@@ -1,4 +1,4 @@
 RDP_ADDRESS=(probing...)
-noVNC_URL=https://dedicated-florida-fighting-stakeholders.trycloudflare.com/vnc.html
+noVNC_URL=https://glasses-specify-edges-conclude.trycloudflare.com/vnc.html
 CODESERVER_URL=(probing...)
 USER=runneradmin
