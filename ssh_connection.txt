@@ -1,4 +1,10 @@
+<<<<<<< HEAD
 ﻿RDP_ADDRESS=(probing...)
 noVNC_URL=https://xuidb-162-156-177-73.a.free.pinggy.link/vnc.html
 CODESERVER_URL=https://tkkpk-162-156-177-73.a.free.pinggy.link
+=======
+RDP_ADDRESS=(probing...)
+noVNC_URL=https://cab-trackback-replace-adjusted.trycloudflare.com/vnc.html
+CODESERVER_URL=https://distributions-casey-opposite-tmp.trycloudflare.com
+>>>>>>> 8f5160e47923cd7c91a396e93e35062944a75e52
 USER=runneradmin
