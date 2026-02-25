@@ -146,10 +146,7 @@ jobs:
         shell: pwsh
         run: |
           $logRdp = "$env:TEMP\pinggy_rdp.log"
-          $rdpJob = Start-Job -ScriptBlock {
-              param($log)
-              & ssh -4 -o StrictHostKeyChecking=no -p 443 -R 0:localhost:3389 tcp@a.pinggy.io 2>&1 | ForEach-Object { Add-Content -Path $log -Value $_ }
-          } -ArgumentList $logRdp
+          Start-Process ssh -ArgumentList "-4 -o StrictHostKeyChecking=no -p 443 -R 0:localhost:3389 tcp@a.pinggy.io" -RedirectStandardOutput $logRdp -RedirectStandardError $logRdp -WindowStyle Hidden
 
       # ── 6. Summary & Connection Details ─────────────────────────────────────
       - name: Connection Summary
@@ -160,8 +157,8 @@ jobs:
           $uCs    = "(probing...)"
           $rdpAddr = "(probing...)"
           
-          $logNovnc = "$env:TEMP\cf-novnc.out.log"
-          $logCs    = "$env:TEMP\cf-cs.out.log"
+          $logNovnc = "$env:TEMP\cf-novnc.err.log"
+          $logCs    = "$env:TEMP\cf-cs.err.log"
           $logPinggy = "$env:TEMP\pinggy_rdp.log"
           if (!(Test-Path $logPinggy)) { New-Item -ItemType File -Path $logPinggy -Force | Out-Null }
 
@@ -211,8 +208,8 @@ jobs:
           $minutes = [Math]::Min([int]"${{ github.event.inputs.session_duration }}", 340)
           $end = (Get-Date).AddMinutes($minutes)
           
-          $logNovnc = "$env:TEMP\cf-novnc.out.log"
-          $logCs    = "$env:TEMP\cf-cs.out.log"
+          $logNovnc = "$env:TEMP\cf-novnc.err.log"
+          $logCs    = "$env:TEMP\cf-cs.err.log"
           $logPinggy = "$env:TEMP\pinggy_rdp.log"
 
           while ((Get-Date) -lt $end) {
