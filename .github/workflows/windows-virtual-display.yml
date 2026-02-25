@@ -23,7 +23,6 @@ jobs:
       - name: Enable Remote Desktop
         shell: pwsh
         run: |
-          # Ensure registry paths exist and set properties
           Set-ItemProperty `
             -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' `
             -Name "fDenyTSConnections" -Value 0 -ErrorAction SilentlyContinue
@@ -34,7 +33,6 @@ jobs:
             -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
             -Name "UserAuthentication" -Value 0 -ErrorAction SilentlyContinue
 
-          # Set password and show errors if any
           $pass = if ($env:SESSION_PASSWORD) { $env:SESSION_PASSWORD } else { "Admin@Runner_2026_Complex!" }
           $user = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name.Split('\')[1]
           Write-Host "Setting password for user: $user"
@@ -51,32 +49,26 @@ jobs:
           Write-Host "Installing TightVNC via winget..."
           winget install GlavSoft.TightVNC --accept-source-agreements --accept-package-agreements
           
-          # Dynamic discovery of tvnserver.exe
           $vncExe = Get-ChildItem -Path "$env:ProgramFiles\TightVNC", "${env:ProgramFiles(x86)}\TightVNC" -Filter "tvnserver.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName -First 1
           
           if (-not $vncExe) {
-              Write-Host "TightVNC not found in Program Files. Searching C:\..."
               $vncExe = Get-ChildItem -Path "C:\" -Filter "tvnserver.exe" -Recurse -Depth 4 -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName -First 1
           }
 
           if (-not $vncExe) { throw "TightVNC installation failed - tvnserver.exe not found" }
           Write-Host "TightVNC found at: $vncExe"
 
-          # Configure via Registry (TightVNC Server)
-          $vncPass = if ($env:VNC_PASSWORD) { $env:VNC_PASSWORD } else { "vnc12345" }
           $reg = "HKLM:\SOFTWARE\TightVNC\Server"
           if (-not (Test-Path $reg)) { New-Item -Path $reg -Force | Out-Null }
           
-          # Basic settings to allow connections
-          Set-ItemProperty -Path $reg -Name "SecurityTypes" -Value 1 -Type DWord  # 1 = None
+          Set-ItemProperty -Path $reg -Name "AcceptSetPassword" -Value 1 -Type DWord
+          Set-ItemProperty -Path $reg -Name "AlwaysShared" -Value 1 -Type DWord
+          Set-ItemProperty -Path $reg -Name "SecurityTypes" -Value 1 -Type DWord
           Set-ItemProperty -Path $reg -Name "UseVncAuthentication" -Value 0 -Type DWord
 
-          # Start TightVNC
           Write-Host "Starting TightVNC..."
           Start-Process $vncExe -ArgumentList "-run" -WindowStyle Hidden
           Start-Sleep -Seconds 5
-        env:
-          VNC_PASSWORD: ${{ secrets.VNC_PASSWORD }}
 
       - name: Setup noVNC
         shell: pwsh
@@ -94,7 +86,6 @@ jobs:
           
           Write-Host "Installing code-server locally in $csDir..."
           Set-Location $csDir
-          # Install locally to avoid EBUSY on global prefix
           npm install code-server --no-save --quiet
           
           $binDir = Join-Path $csDir "node_modules\.bin"
@@ -110,7 +101,7 @@ jobs:
           
           $args = "--bind-addr 127.0.0.1:8080 --auth password --disable-telemetry `"$env:GITHUB_WORKSPACE`""
           
-          Write-Host "Starting code-server via explicit shim path..."
+          Write-Host "Starting code-server..."
           if ($csShim.EndsWith(".cmd")) {
               Start-Process cmd -ArgumentList "/c", "`"$csShim`" $args" -RedirectStandardOutput "$env:TEMP\codeserver.out.log" -RedirectStandardError "$env:TEMP\codeserver.err.log" -WindowStyle Hidden
           } elseif ($csShim.EndsWith(".ps1")) {
@@ -123,56 +114,64 @@ jobs:
         env:
           CODESERVER_PASSWORD: ${{ secrets.CODESERVER_PASSWORD }}
 
-      # ── 4. Cloudflared Tunnels ──────────────────────────────────────────────
-      - name: Start Cloudflared Tunnels
+      # ── 4. Pinggy Tunnels (noVNC + Code Server + RDP) ───────────────────────
+      - name: Start Pinggy Tunnels
         shell: pwsh
         run: |
-          $cf = "$env:TEMP\cloudflared.exe"
-          Invoke-WebRequest -Uri "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe" -OutFile $cf
-          Start-Process $cf -ArgumentList "tunnel --url http://127.0.0.1:6080 --no-autoupdate" -RedirectStandardOutput "$env:TEMP\cf-novnc.out.log" -RedirectStandardError "$env:TEMP\cf-novnc.err.log" -WindowStyle Hidden
-          Start-Process $cf -ArgumentList "tunnel --url http://127.0.0.1:8080 --no-autoupdate" -RedirectStandardOutput "$env:TEMP\cf-cs.out.log" -RedirectStandardError "$env:TEMP\cf-cs.err.log" -WindowStyle Hidden
+          # noVNC (HTTP tunnel on port 6080)
+          Start-Process ssh -ArgumentList "-T -4 -o StrictHostKeyChecking=no -p 443 -R 0:localhost:6080 a.pinggy.io" `
+            -RedirectStandardOutput "$env:TEMP\pinggy_novnc.log" `
+            -RedirectStandardError "$env:TEMP\pinggy_novnc_err.log" `
+            -WindowStyle Hidden
 
-      # ── 5. Pinggy TCP Tunnel (RDP) ──────────────────────────────────────────
-      - name: Start Pinggy Tunnel
-        shell: pwsh
-        run: |
-          $logRdp = "$env:TEMP\pinggy_rdp.log"
-          $logRdpErr = "$env:TEMP\pinggy_rdp_err.log"
-          Start-Process ssh -ArgumentList "-T -4 -o StrictHostKeyChecking=no -p 443 -R 0:localhost:3389 tcp@a.pinggy.io" -RedirectStandardOutput $logRdp -RedirectStandardError $logRdpErr -WindowStyle Hidden
+          # Code Server (HTTP tunnel on port 8080)
+          Start-Process ssh -ArgumentList "-T -4 -o StrictHostKeyChecking=no -p 443 -R 0:localhost:8080 a.pinggy.io" `
+            -RedirectStandardOutput "$env:TEMP\pinggy_cs.log" `
+            -RedirectStandardError "$env:TEMP\pinggy_cs_err.log" `
+            -WindowStyle Hidden
 
-      # ── 6. Summary & Connection Details ─────────────────────────────────────
+          # RDP (TCP tunnel on port 3389)
+          Start-Process ssh -ArgumentList "-T -4 -o StrictHostKeyChecking=no -p 443 -R 0:localhost:3389 tcp@a.pinggy.io" `
+            -RedirectStandardOutput "$env:TEMP\pinggy_rdp.log" `
+            -RedirectStandardError "$env:TEMP\pinggy_rdp_err.log" `
+            -WindowStyle Hidden
+
+      # ── 5. Connection Summary ────────────────────────────────────────────────
       - name: Connection Summary
         shell: pwsh
         run: |
           Write-Host "Waiting for tunnel URLs to initialize..."
-          $uNovnc = "(probing...)"
-          $uCs    = "(probing...)"
+          $uNovnc  = "(probing...)"
+          $uCs     = "(probing...)"
           $rdpAddr = "(probing...)"
-          
-          $logNovnc = "$env:TEMP\cf-novnc.err.log"
-          $logCs    = "$env:TEMP\cf-cs.err.log"
-          $logPinggy = "$env:TEMP\pinggy_rdp.log"
-          $logPinggyErr = "$env:TEMP\pinggy_rdp_err.log"
-          if (!(Test-Path $logPinggy)) { New-Item -ItemType File -Path $logPinggy -Force | Out-Null }
-          if (!(Test-Path $logPinggyErr)) { New-Item -ItemType File -Path $logPinggyErr -Force | Out-Null }
 
           for ($i = 0; $i -lt 15; $i++) {
-            $rawNovnc = Get-Content $logNovnc -Raw -ErrorAction SilentlyContinue
-            if ($uNovnc -eq "(probing...)" -and $rawNovnc -match 'https://[a-z0-9\-]+\.trycloudflare\.com') { $uNovnc = $Matches[0] }
-            
-            $rawCs = Get-Content $logCs -Raw -ErrorAction SilentlyContinue
-            if ($uCs -eq "(probing...)" -and $rawCs -match 'https://[a-z0-9\-]+\.trycloudflare\.com') { $uCs = $Matches[0] }
-            
-            if ($rdpAddr -eq "(probing...)") {
-                $m = Select-String -Path $logPinggy, $logPinggyErr -Pattern "tcp://[^ ]*\.(pgy\.in|pinggy\.link|pinggy\.io):[0-9]+" -ErrorAction SilentlyContinue
-                if ($m) { $rdpAddr = $m.Matches.Value | Select-Object -First 1 }
+            # noVNC URL
+            if ($uNovnc -eq "(probing...)") {
+              $raw = Get-Content "$env:TEMP\pinggy_novnc.log", "$env:TEMP\pinggy_novnc_err.log" -Raw -ErrorAction SilentlyContinue
+              if ($raw -match 'https?://[a-z0-9\-]+\.(a\.pinggy\.io|pinggy\.link|pgy\.in)(:[0-9]+)?') { $uNovnc = $Matches[0] }
             }
-            
+
+            # Code Server URL
+            if ($uCs -eq "(probing...)") {
+              $raw = Get-Content "$env:TEMP\pinggy_cs.log", "$env:TEMP\pinggy_cs_err.log" -Raw -ErrorAction SilentlyContinue
+              if ($raw -match 'https?://[a-z0-9\-]+\.(a\.pinggy\.io|pinggy\.link|pgy\.in)(:[0-9]+)?') { $uCs = $Matches[0] }
+            }
+
+            # RDP TCP address
+            if ($rdpAddr -eq "(probing...)") {
+              $paths = @("$env:TEMP\pinggy_rdp.log","$env:TEMP\pinggy_rdp_err.log") | Where-Object { Test-Path $_ }
+              if ($paths) {
+                $m = Select-String -Path $paths -Pattern "tcp://[^ ]*\.(pgy\.in|pinggy\.link|pinggy\.io):[0-9]+" -ErrorAction SilentlyContinue
+                if ($m) { $rdpAddr = $m.Matches.Value | Select-Object -First 1 }
+              }
+            }
+
             if ($uNovnc -ne "(probing...)" -and $uCs -ne "(probing...)" -and $rdpAddr -ne "(probing...)") { break }
             Start-Sleep -Seconds 5
             Write-Host "  Retrying URL extraction ($($i+1)/15)..."
           }
-          
+
           $user = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name.Split('\')[1]
           $pass = if ($env:SESSION_PASSWORD) { $env:SESSION_PASSWORD } else { "Admin@Runner_2026_Complex!" }
 
@@ -182,10 +181,10 @@ jobs:
           Write-Host "  Code Server:       $uCs"
           Write-Host "  RDP/Windows User:  $user"
           Write-Host "  RDP/Windows Pass:  $pass"
-          Write-Host "  VNC/Code Password: vnc12345 / code12345 (defaults)"
+          Write-Host "  Code Password:     code12345 (default)"
+          Write-Host "  VNC:               No password (auth disabled)"
           Write-Host "========================================================"
 
-          # Save to file for tracking
           "RDP_ADDRESS=$rdpAddr`r`nnoVNC_URL=$uNovnc/vnc.html`r`nCODESERVER_URL=$uCs`r`nUSER=$user" | Out-File ssh_connection.txt -Encoding utf8
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
@@ -195,50 +194,41 @@ jobs:
         env:
           SESSION_PASSWORD: ${{ secrets.SESSION_PASSWORD }}
 
-      # ── 6.5 Debug Logs ──────────────────────────────────────────────────────
+      # ── 6. Debug Logs ────────────────────────────────────────────────────────
       - name: Debug Logs
         if: always()
         shell: pwsh
         run: |
-          Write-Host "--- pinggy_rdp.log ---"
-          if (Test-Path "$env:TEMP\pinggy_rdp.log") { Get-Content "$env:TEMP\pinggy_rdp.log" }
-          Write-Host "`n--- pinggy_rdp_err.log ---"
-          if (Test-Path "$env:TEMP\pinggy_rdp_err.log") { Get-Content "$env:TEMP\pinggy_rdp_err.log" }
-          Write-Host "`n--- codeserver.err.log ---"
-          if (Test-Path "$env:TEMP\codeserver.err.log") { Get-Content "$env:TEMP\codeserver.err.log" }
-          Write-Host "`n--- codeserver.out.log ---"
-          if (Test-Path "$env:TEMP\codeserver.out.log") { Get-Content "$env:TEMP\codeserver.out.log" }
-          Write-Host "`n--- cf-cs.err.log ---"
-          if (Test-Path "$env:TEMP\cf-cs.err.log") { Get-Content "$env:TEMP\cf-cs.err.log" }
+          foreach ($log in @("pinggy_novnc.log","pinggy_novnc_err.log","pinggy_cs.log","pinggy_cs_err.log","pinggy_rdp.log","pinggy_rdp_err.log","codeserver.out.log","codeserver.err.log")) {
+            $path = "$env:TEMP\$log"
+            Write-Host "`n--- $log ---"
+            if (Test-Path $path) { Get-Content $path } else { Write-Host "(not found)" }
+          }
 
-      # ── 7. Keep Session Alive ───────────────────────────────────────────────
+      # ── 7. Keep Session Alive ────────────────────────────────────────────────
       - name: Keep session alive
         shell: pwsh
         run: |
           $minutes = [Math]::Min([int]"${{ github.event.inputs.session_duration }}", 340)
           $end = (Get-Date).AddMinutes($minutes)
-          
-          $logNovnc = "$env:TEMP\cf-novnc.err.log"
-          $logCs    = "$env:TEMP\cf-cs.err.log"
-          $logPinggy = "$env:TEMP\pinggy_rdp.log"
 
           while ((Get-Date) -lt $end) {
-              $rem = [Math]::Round(($end - (Get-Date)).TotalMinutes)
-              $time = (Get-Date).ToString("HH:mm")
-              
-              # Periodically report URLs in case they were missed by the summary step
-              $rawNovnc = Get-Content $logNovnc -Raw -ErrorAction SilentlyContinue
-              $uNovnc = if ($rawNovnc -match 'https://[a-z0-9\-]+\.trycloudflare\.com') { $Matches[0] } else { "(probing...)" }
-              
-              $rawCs = Get-Content $logCs -Raw -ErrorAction SilentlyContinue
-              $uCs    = if ($rawCs -match 'https://[a-z0-9\-]+\.trycloudflare\.com') { $Matches[0] } else { "(probing...)" }
-              
-              $paths = @($logPinggy, "$env:TEMP\pinggy_rdp_err.log") | Where-Object { Test-Path $_ }
-              if ($paths) {
-                  $rdp = (Select-String -Path $paths -Pattern "tcp://[^ ]*\.(pgy\.in|pinggy\.link|pinggy\.io):[0-9]+" -ErrorAction SilentlyContinue | ForEach-Object { $_.Matches.Value } | Select-Object -First 1)
-              }
-              if (!$rdp) { $rdp = "(probing...)" }
+            $rem  = [Math]::Round(($end - (Get-Date)).TotalMinutes)
+            $time = (Get-Date).ToString("HH:mm")
 
-              Write-Host "[$time] $rem min left | RDP: $rdp | VNC: $uNovnc | CS: $uCs"
-              Start-Sleep -Seconds 120
+            $rawN = Get-Content "$env:TEMP\pinggy_novnc.log","$env:TEMP\pinggy_novnc_err.log" -Raw -ErrorAction SilentlyContinue
+            $uNovnc = if ($rawN -match 'https?://[a-z0-9\-]+\.(a\.pinggy\.io|pinggy\.link|pgy\.in)(:[0-9]+)?') { $Matches[0] } else { "(probing...)" }
+
+            $rawC = Get-Content "$env:TEMP\pinggy_cs.log","$env:TEMP\pinggy_cs_err.log" -Raw -ErrorAction SilentlyContinue
+            $uCs = if ($rawC -match 'https?://[a-z0-9\-]+\.(a\.pinggy\.io|pinggy\.link|pgy\.in)(:[0-9]+)?') { $Matches[0] } else { "(probing...)" }
+
+            $paths = @("$env:TEMP\pinggy_rdp.log","$env:TEMP\pinggy_rdp_err.log") | Where-Object { Test-Path $_ }
+            $rdp = "(probing...)"
+            if ($paths) {
+              $m = Select-String -Path $paths -Pattern "tcp://[^ ]*\.(pgy\.in|pinggy\.link|pinggy\.io):[0-9]+" -ErrorAction SilentlyContinue
+              if ($m) { $rdp = $m.Matches.Value | Select-Object -First 1 }
+            }
+
+            Write-Host "[$time] $rem min left | RDP: $rdp | VNC: $uNovnc | CS: $uCs"
+            Start-Sleep -Seconds 120
           }
