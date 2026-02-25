@@ -146,7 +146,8 @@ jobs:
         shell: pwsh
         run: |
           $logRdp = "$env:TEMP\pinggy_rdp.log"
-          Start-Process ssh -ArgumentList "-4 -o StrictHostKeyChecking=no -p 443 -R 0:localhost:3389 tcp@a.pinggy.io" -RedirectStandardOutput $logRdp -RedirectStandardError $logRdp -WindowStyle Hidden
+          $logRdpErr = "$env:TEMP\pinggy_rdp_err.log"
+          Start-Process ssh -ArgumentList "-4 -o StrictHostKeyChecking=no -p 443 -R 0:localhost:3389 tcp@a.pinggy.io" -RedirectStandardOutput $logRdp -RedirectStandardError $logRdpErr -WindowStyle Hidden
 
       # ── 6. Summary & Connection Details ─────────────────────────────────────
       - name: Connection Summary
