@@ -115,7 +115,7 @@ jobs:
           $csPass = if ($env:CODESERVER_PASSWORD) { $env:CODESERVER_PASSWORD } else { "code12345" }
           $env:PASSWORD = $csPass
           
-          $args = "--bind-addr 0.0.0.0:8080 --auth password --disable-telemetry `"$env:GITHUB_WORKSPACE`""
+          $args = "--bind-addr 127.0.0.1:8080 --auth password --disable-telemetry `"$env:GITHUB_WORKSPACE`""
           
           if ($csShim.EndsWith(".ps1")) {
               Write-Host "Starting code-server (PS1) via powershell..."
@@ -161,7 +161,9 @@ jobs:
           $logNovnc = "$env:TEMP\cf-novnc.err.log"
           $logCs    = "$env:TEMP\cf-cs.err.log"
           $logPinggy = "$env:TEMP\pinggy_rdp.log"
+          $logPinggyErr = "$env:TEMP\pinggy_rdp_err.log"
           if (!(Test-Path $logPinggy)) { New-Item -ItemType File -Path $logPinggy -Force | Out-Null }
+          if (!(Test-Path $logPinggyErr)) { New-Item -ItemType File -Path $logPinggyErr -Force | Out-Null }
 
           for ($i = 0; $i -lt 15; $i++) {
             $rawNovnc = Get-Content $logNovnc -Raw -ErrorAction SilentlyContinue
@@ -171,7 +173,7 @@ jobs:
             if ($uCs -eq "(probing...)" -and $rawCs -match 'https://[a-z0-9\-]+\.trycloudflare\.com') { $uCs = $Matches[0] }
             
             if ($rdpAddr -eq "(probing...)") {
-                $m = Select-String -Path $logPinggy -Pattern "tcp://[^ ]*\.(pgy\.in|pinggy\.link|pinggy\.io):[0-9]+" -ErrorAction SilentlyContinue
+                $m = Select-String -Path $logPinggy, $logPinggyErr -Pattern "tcp://[^ ]*\.(pgy\.in|pinggy\.link|pinggy\.io):[0-9]+" -ErrorAction SilentlyContinue
                 if ($m) { $rdpAddr = $m.Matches.Value | Select-Object -First 1 }
             }
             
@@ -224,7 +226,10 @@ jobs:
               $rawCs = Get-Content $logCs -Raw -ErrorAction SilentlyContinue
               $uCs    = if ($rawCs -match 'https://[a-z0-9\-]+\.trycloudflare\.com') { $Matches[0] } else { "(probing...)" }
               
-              $rdp    = (Select-String -Path $logPinggy -Pattern "tcp://[^ ]*\.(pgy\.in|pinggy\.link|pinggy\.io):[0-9]+" -ErrorAction SilentlyContinue | ForEach-Object { $_.Matches.Value } | Select-Object -First 1)
+              $paths = @($logPinggy, "$env:TEMP\pinggy_rdp_err.log") | Where-Object { Test-Path $_ }
+              if ($paths) {
+                  $rdp = (Select-String -Path $paths -Pattern "tcp://[^ ]*\.(pgy\.in|pinggy\.link|pinggy\.io):[0-9]+" -ErrorAction SilentlyContinue | ForEach-Object { $_.Matches.Value } | Select-Object -First 1)
+              }
               if (!$rdp) { $rdp = "(probing...)" }
 
               Write-Host "[$time] $rem min left | RDP: $rdp | VNC: $uNovnc | CS: $uCs"

@@ -87,15 +87,15 @@ jobs:
 
           # Wait for the tunnel URL to appear in the log
           Write-Host "Waiting for tunnel URL..."
-          $logFile = $sshLogPath
           $timeout = 45
           $counter = 0
           while ($counter -lt $timeout) {
               Start-Sleep -Seconds 2
               $counter += 2
-              if (Test-Path $logFile) {
-                  $content = Get-Content $logFile -Raw -ErrorAction SilentlyContinue
-                  if ($content -and ($content -match "tcp://" -or $content -match "pgy\.in" -or $content -match "pinggy")) {
+              $paths = @($sshLogPath, $sshLogErrPath) | Where-Object { Test-Path $_ }
+              if ($paths) {
+                  $content = Get-Content $paths -Raw -ErrorAction SilentlyContinue
+                  if ($content -match "tcp://" -or $content -match "pgy\.in" -or $content -match "pinggy") {
                       break
                   }
               }
@@ -103,10 +103,11 @@ jobs:
 
           # Debug: Show full log
           Write-Host "--- Debug: Tunnel Log Content ---"
-          if (Test-Path $logFile) { Get-Content $logFile } else { Write-Host "Log file not found." }
+          $paths = @($sshLogPath, $sshLogErrPath) | Where-Object { Test-Path $_ }
+          if ($paths) { Get-Content $paths } else { Write-Host "Log file not found." }
           Write-Host "--------------------------------"
 
-          $PINGGY_SSH = Select-String -Path $logFile -Pattern "tcp://[^ ]*\.(pgy\.in|pinggy\.link|pinggy\.io):[0-9]+" -ErrorAction SilentlyContinue | ForEach-Object { $_.Matches.Value } | Select-Object -First 1
+          $PINGGY_SSH = Select-String -Path $sshLogPath, $sshLogErrPath -Pattern "tcp://[^ ]*\.(pgy\.in|pinggy\.link|pinggy\.io):[0-9]+" -ErrorAction SilentlyContinue | ForEach-Object { $_.Matches.Value } | Select-Object -First 1
 
           Write-Host "=========================================================="
           Write-Host "SSH Address: $PINGGY_SSH"
