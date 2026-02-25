@@ -155,21 +155,30 @@ jobs:
       - name: Connection Summary
         shell: pwsh
         run: |
-          Write-Host "Waiting 30s for tunnels..."
-          Start-Sleep -Seconds 30
+          Write-Host "Waiting for tunnel URLs to initialize..."
+          $uNovnc = "(probing...)"
+          $uCs    = "(probing...)"
+          $rdpAddr = ""
           
-          function Get-CF-URL($log) {
-            $raw = Get-Content $log -Raw -ErrorAction SilentlyContinue
-            if ($raw -match 'https://[a-z0-9\-]+\.trycloudflare\.com') { return $matches[0] }
-            return "(probing...)"
-          }
-
-          $uNovnc = Get-CF-URL "$env:TEMP\cf-novnc.out.log"
-          $uCs    = Get-CF-URL "$env:TEMP\cf-cs.out.log"
-          
+          $logNovnc = "$env:TEMP\cf-novnc.out.log"
+          $logCs    = "$env:TEMP\cf-cs.out.log"
           $logPinggy = "$env:TEMP\pinggy_rdp.log"
           if (!(Test-Path $logPinggy)) { New-Item -ItemType File -Path $logPinggy -Force | Out-Null }
-          $rdpAddr = Select-String -Path $logPinggy -Pattern "tcp://[^ ]*\.(pgy\.in|pinggy\.link|pinggy\.io):[0-9]+" -ErrorAction SilentlyContinue | ForEach-Object { $_.Matches.Value } | Select-Object -First 1
+
+          for ($i = 0; $i -lt 15; $i++) {
+            $rawNovnc = Get-Content $logNovnc -Raw -ErrorAction SilentlyContinue
+            if ($rawNovnc -match 'https://[a-z0-9\-]+\.trycloudflare\.com') { $uNovnc = $matches[0] }
+            
+            $rawCs = Get-Content $logCs -Raw -ErrorAction SilentlyContinue
+            if ($rawCs -match 'https://[a-z0-9\-]+\.trycloudflare\.com') { $uCs = $matches[0] }
+            
+            $rdpMatch = Select-String -Path $logPinggy -Pattern "tcp://[^ ]*\.(pgy\.in|pinggy\.link|pinggy\.io):[0-9]+" -ErrorAction SilentlyContinue
+            if ($rdpMatch) { $rdpAddr = $rdpMatch.Matches.Value | Select-Object -First 1 }
+            
+            if ($uNovnc -ne "(probing...)" -and $uCs -ne "(probing...)" -and $rdpAddr) { break }
+            Start-Sleep -Seconds 5
+            Write-Host "  Retrying URL extraction ($($i+1)/15)..."
+          }
           
           $user = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name.Split('\')[1]
           $pass = if ($env:SESSION_PASSWORD) { $env:SESSION_PASSWORD } else { "Admin@Runner_2026_Complex!" }
