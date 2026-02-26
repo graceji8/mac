@@ -66,36 +66,41 @@ jobs:
       - name: Install OpenVSCode Server
         shell: powershell
         run: |
-          $version = "1.89.1"
-          $url = "https://github.com/gitpod-io/openvscode-server/releases/download/openvscode-server-v$version/openvscode-server-v$version-win32-x64.tar.gz"
-          Invoke-WebRequest -Uri $url -OutFile "openvscode.tar.gz"
-          tar -xzf "openvscode.tar.gz"
-          $serverDir = "openvscode-server-v$version-win32-x64"
-          Start-Process -FilePath "$serverDir\bin\openvscode-server.cmd" `
-            -ArgumentList "--port 8080 --without-connection-token --host 0.0.0.0" `
-            -NoNewWindow
-          Start-Sleep -Seconds 5
-          echo "✅ OpenVSCode Server started on port 8080 (no password needed)"
-
-      - name: Install VS Code on Desktop
-        shell: powershell
-        run: |
-          Invoke-WebRequest `
-            -Uri "https://code.visualstudio.com/sha/download?build=stable&os=win32-x64-user" `
-            -OutFile "vscode-installer.exe"
-          Start-Process -FilePath "vscode-installer.exe" `
-            -ArgumentList "/VERYSILENT /NORESTART /MERGETASKS=!runcode" -Wait
-          echo "✅ VS Code installed on desktop (accessible via RDP)"
+            $ProgressPreference = 'SilentlyContinue'
+            try {
+                # Get latest release version dynamically
+                $release = Invoke-RestMethod -Uri "https://api.github.com/repos/gitpod-io/openvscode-server/releases/latest"
+                $version = $release.tag_name -replace "openvscode-server-v", ""
+                $url = "https://github.com/gitpod-io/openvscode-server/releases/download/openvscode-server-v$version/openvscode-server-v$version-win32-x64.tar.gz"
+                echo "Downloading OpenVSCode Server v$version..."
+                Invoke-WebRequest -Uri $url -OutFile "openvscode.tar.gz" -TimeoutSec 120
+                tar -xzf "openvscode.tar.gz"
+                $serverDir = Get-ChildItem -Directory -Filter "openvscode-server-*" | Select-Object -First 1 -ExpandProperty FullName
+                Start-Process -FilePath "$serverDir\bin\openvscode-server.cmd" `
+                -ArgumentList "--port 8080 --without-connection-token --host 0.0.0.0" `
+                -NoNewWindow
+                Start-Sleep -Seconds 5
+                echo "✅ OpenVSCode Server v$version started on port 8080"
+            } catch {
+                echo "⚠️ OpenVSCode skipped: $_"
+            }
 
       - name: Install Tailscale
         shell: powershell
         run: |
-          Invoke-WebRequest `
-            -Uri "https://pkgs.tailscale.com/stable/tailscale-setup-latest-amd64.exe" `
-            -OutFile "tailscale-setup.exe"
+          $ProgressPreference = 'SilentlyContinue'
+          Invoke-WebRequest -Uri "https://pkgs.tailscale.com/stable/tailscale-setup-latest-amd64.exe" -OutFile "tailscale-setup.exe" -TimeoutSec 120
           Start-Process -FilePath "tailscale-setup.exe" -ArgumentList "/S" -Wait
-          Start-Sleep -Seconds 5
-          echo "✅ Tailscale installed"
+          Start-Sleep -Seconds 8
+
+          # Find tailscale.exe wherever it installed
+          $tailscale = Get-ChildItem -Path "C:\Program Files\Tailscale", "C:\Program Files (x86)\Tailscale" `
+            -Filter "tailscale.exe" -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName
+          if (-not $tailscale) {
+            $tailscale = (Get-Command tailscale -ErrorAction SilentlyContinue).Source
+          }
+          echo "TAILSCALE_BIN=$tailscale" >> $env:GITHUB_ENV
+          echo "✅ Tailscale installed at: $tailscale"
 
       - name: Get Tailscale OAuth Token
         shell: powershell
@@ -114,14 +119,14 @@ jobs:
             -Method POST `
             -ContentType "application/x-www-form-urlencoded" `
             -Body $body
-          $token = $response.access_token
-          echo "TS_ACCESS_TOKEN=$token" >> $env:GITHUB_ENV
-          echo "✅ Tailscale OAuth token obtained"
+          echo "TS_ACCESS_TOKEN=$($response.access_token)" >> $env:GITHUB_ENV
+          echo "✅ OAuth token obtained"
 
       - name: Connect to Tailscale
         shell: powershell
         run: |
-          $tailscale = "C:\Program Files\Tailscale\tailscale.exe"
+          $tailscale = $env:TAILSCALE_BIN
+          echo "Using Tailscale at: $tailscale"
           & $tailscale up `
             --authkey=$env:TS_ACCESS_TOKEN `
             --hostname="github-runner-${{ github.run_id }}" `
@@ -130,34 +135,23 @@ jobs:
           Start-Sleep -Seconds 10
           $ip = & $tailscale ip -4
           echo "TAILSCALE_IP=$ip" >> $env:GITHUB_ENV
-          echo "✅ Connected to Tailscale | IP: $ip"
+          echo "✅ Tailscale IP: $ip"
 
       - name: Print Connection Summary
         shell: powershell
         run: |
           echo ""
-          echo "╔══════════════════════════════════════════════════════════╗"
-          echo "║           REMOTE ACCESS CONNECTION SUMMARY               ║"
-          echo "╠══════════════════════════════════════════════════════════╣"
-          echo "║  Tailscale IP : $env:TAILSCALE_IP"
-          echo "╠══════════════════════════════════════════════════════════╣"
-          echo "║  RDP (Microsoft Remote Desktop)"
-          echo "║    Host : $env:TAILSCALE_IP"
-          echo "║    Port : 3389"
-          echo "║    User : runneradmin"
-          echo "║    Pass : P@ssw0rd!RDP2024"
-          echo "╠══════════════════════════════════════════════════════════╣"
-          echo "║  VNC"
-          echo "║    Host : $env:TAILSCALE_IP:5900"
-          echo "║    Pass : vnc1234"
-          echo "╠══════════════════════════════════════════════════════════╣"
-          echo "║  OpenVSCode Server (Browser IDE)"
-          echo "║    URL  : http://$env:TAILSCALE_IP:8080"
-          echo "║    Auth : none (open access via Tailscale)"
-          echo "╠══════════════════════════════════════════════════════════╣"
-          echo "║  NOTE: Install Tailscale on YOUR machine first!"
-          echo "║  https://tailscale.com/download"
-          echo "╚══════════════════════════════════════════════════════════╝"
+          echo "╔══════════════════════════════════════════════╗"
+          echo "║        REMOTE ACCESS CONNECTION INFO         ║"
+          echo "╠══════════════════════════════════════════════╣"
+          echo "║  RDP  → $env:TAILSCALE_IP:3389"
+          echo "║  User : runneradmin"
+          echo "║  Pass : P@ssw0rd!RDP2024"
+          echo "╠══════════════════════════════════════════════╣"
+          echo "║  VNC  → $env:TAILSCALE_IP:5900  Pass: vnc1234"
+          echo "╠══════════════════════════════════════════════╣"
+          echo "║  IDE  → http://$env:TAILSCALE_IP:8080"
+          echo "╚══════════════════════════════════════════════╝"
 
       - name: Keep session alive
         shell: powershell
@@ -167,21 +161,20 @@ jobs:
           $seconds = $minutes * 60
           $interval = 30
           $elapsed = 0
-          echo "⏱ Session alive for $minutes minutes. Connect now!"
+          echo "⏱ Session alive for $minutes minutes"
           while ($elapsed -lt $seconds) {
             Start-Sleep -Seconds $interval
             $elapsed += $interval
             $remaining = [math]::Round(($seconds - $elapsed) / 60, 1)
-            $tailscale = "C:\Program Files\Tailscale\tailscale.exe"
-            $status = & $tailscale status --json | ConvertFrom-Json
-            echo "[$elapsed s] ~$remaining min left | Tailscale: $($status.BackendState)"
+            echo "[$elapsed s] ~$remaining min remaining"
           }
-          echo "🔴 Session ended."
+          echo "🔴 Session ended"
 
       - name: Disconnect Tailscale
         if: always()
         shell: powershell
         run: |
-          $tailscale = "C:\Program Files\Tailscale\tailscale.exe"
-          & $tailscale logout
-          echo "✅ Tailscale disconnected"
+          if ($env:TAILSCALE_BIN) {
+            & $env:TAILSCALE_BIN logout
+            echo "✅ Tailscale disconnected"
+          }
