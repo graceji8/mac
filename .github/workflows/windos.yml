@@ -66,36 +66,46 @@ jobs:
       - name: Install OpenVSCode Server
         shell: powershell
         run: |
-            $ProgressPreference = 'SilentlyContinue'
-            try {
-                # Get latest release version dynamically
-                $release = Invoke-RestMethod -Uri "https://api.github.com/repos/gitpod-io/openvscode-server/releases/latest"
-                $version = $release.tag_name -replace "openvscode-server-v", ""
-                $url = "https://github.com/gitpod-io/openvscode-server/releases/download/openvscode-server-v$version/openvscode-server-v$version-win32-x64.tar.gz"
-                echo "Downloading OpenVSCode Server v$version..."
-                Invoke-WebRequest -Uri $url -OutFile "openvscode.tar.gz" -TimeoutSec 120
-                tar -xzf "openvscode.tar.gz"
-                $serverDir = Get-ChildItem -Directory -Filter "openvscode-server-*" | Select-Object -First 1 -ExpandProperty FullName
-                Start-Process -FilePath "$serverDir\bin\openvscode-server.cmd" `
-                -ArgumentList "--port 8080 --without-connection-token --host 0.0.0.0" `
-                -NoNewWindow
-                Start-Sleep -Seconds 5
-                echo "✅ OpenVSCode Server v$version started on port 8080"
-            } catch {
-                echo "⚠️ OpenVSCode skipped: $_"
-            }
+          $ProgressPreference = 'SilentlyContinue'
+          try {
+            # Get latest release from GitHub API
+            $headers = @{ "User-Agent" = "Mozilla/5.0" }
+            $release = Invoke-RestMethod -Uri "https://api.github.com/repos/gitpod-io/openvscode-server/releases/latest" -Headers $headers
+            $asset = $release.assets | Where-Object { $_.name -like "*win32-x64.tar.gz" } | Select-Object -First 1
+            if (-not $asset) { throw "No win32-x64 asset found" }
+            echo "Downloading: $($asset.browser_download_url)"
+            Invoke-WebRequest -Uri $asset.browser_download_url -OutFile "openvscode.tar.gz" -Headers $headers -TimeoutSec 180
+            tar -xzf "openvscode.tar.gz"
+            $serverDir = Get-ChildItem -Directory -Filter "openvscode-server-*" | Select-Object -First 1 -ExpandProperty FullName
+            Start-Process -FilePath "$serverDir\bin\openvscode-server.cmd" `
+              -ArgumentList "--port 8080 --without-connection-token --host 0.0.0.0" `
+              -NoNewWindow
+            Start-Sleep -Seconds 5
+            echo "✅ OpenVSCode Server started on port 8080"
+          } catch {
+            echo "⚠️ OpenVSCode skipped: $_"
+          }
 
       - name: Install Tailscale
         shell: powershell
         run: |
           $ProgressPreference = 'SilentlyContinue'
-          Invoke-WebRequest -Uri "https://pkgs.tailscale.com/stable/tailscale-setup-latest-amd64.exe" -OutFile "tailscale-setup.exe" -TimeoutSec 120
-          Start-Process -FilePath "tailscale-setup.exe" -ArgumentList "/S" -Wait
+
+          # Get latest version number from Tailscale API
+          $latest = Invoke-RestMethod -Uri "https://pkgs.tailscale.com/stable/version"
+          $version = $latest.Trim()
+          echo "Installing Tailscale v$version"
+
+          # Use MSI installer (more reliable than exe)
+          $url = "https://pkgs.tailscale.com/stable/tailscale-setup-${version}-amd64.msi"
+          echo "URL: $url"
+          Invoke-WebRequest -Uri $url -OutFile "tailscale.msi" -TimeoutSec 120
+          Start-Process msiexec -ArgumentList "/i tailscale.msi /quiet /norestart" -Wait
           Start-Sleep -Seconds 8
 
-          # Find tailscale.exe wherever it installed
-          $tailscale = Get-ChildItem -Path "C:\Program Files\Tailscale", "C:\Program Files (x86)\Tailscale" `
-            -Filter "tailscale.exe" -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName
+          # Find tailscale.exe
+          $tailscale = Get-ChildItem -Path "C:\Program Files\Tailscale" -Filter "tailscale.exe" -ErrorAction SilentlyContinue |
+            Select-Object -First 1 -ExpandProperty FullName
           if (-not $tailscale) {
             $tailscale = (Get-Command tailscale -ErrorAction SilentlyContinue).Source
           }
