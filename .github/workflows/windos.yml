@@ -68,12 +68,19 @@ jobs:
         run: |
           $ProgressPreference = 'SilentlyContinue'
           try {
-            # Get latest release from GitHub API
-            $headers = @{ "User-Agent" = "Mozilla/5.0" }
-            $release = Invoke-RestMethod -Uri "https://api.github.com/repos/gitpod-io/openvscode-server/releases/latest" -Headers $headers
-            $asset = $release.assets | Where-Object { $_.name -like "*win32-x64.tar.gz" } | Select-Object -First 1
-            if (-not $asset) { throw "No win32-x64 asset found" }
-            echo "Downloading: $($asset.browser_download_url)"
+            # Use Gitpod's official GitHub Action-friendly release
+            $headers = @{ "User-Agent" = "GitHubActions" }
+            $releases = Invoke-RestMethod -Uri "https://api.github.com/repos/gitpod-io/openvscode-server/releases" -Headers $headers
+            # Find first release that has a win32-x64 asset
+            $asset = $null
+            foreach ($release in $releases) {
+              $asset = $release.assets | Where-Object { $_.name -like "*win32-x64.tar.gz" } | Select-Object -First 1
+              if ($asset) { 
+                echo "Found: $($release.tag_name) - $($asset.name)"
+                break 
+              }
+            }
+            if (-not $asset) { throw "No win32-x64 asset found in any release" }
             Invoke-WebRequest -Uri $asset.browser_download_url -OutFile "openvscode.tar.gz" -Headers $headers -TimeoutSec 180
             tar -xzf "openvscode.tar.gz"
             $serverDir = Get-ChildItem -Directory -Filter "openvscode-server-*" | Select-Object -First 1 -ExpandProperty FullName
@@ -90,23 +97,26 @@ jobs:
         shell: powershell
         run: |
           $ProgressPreference = 'SilentlyContinue'
-
-          # Get latest version number from Tailscale API
-          $latest = Invoke-RestMethod -Uri "https://pkgs.tailscale.com/stable/version"
-          $version = $latest.Trim()
-          echo "Installing Tailscale v$version"
-
-          # Use MSI installer (more reliable than exe)
+          # Use official Tailscale GitHub Action approach - hardcoded stable version
+          $version = "1.92.1"
           $url = "https://pkgs.tailscale.com/stable/tailscale-setup-${version}-amd64.msi"
-          echo "URL: $url"
-          Invoke-WebRequest -Uri $url -OutFile "tailscale.msi" -TimeoutSec 120
+          echo "Downloading Tailscale v$version..."
+          try {
+            Invoke-WebRequest -Uri $url -OutFile "tailscale.msi" -TimeoutSec 120
+          } catch {
+            # Fallback to exe installer
+            echo "MSI failed, trying exe..."
+            $url2 = "https://pkgs.tailscale.com/stable/tailscale-setup-${version}.exe"
+            Invoke-WebRequest -Uri $url2 -OutFile "tailscale.exe" -TimeoutSec 120
+            Start-Process -FilePath "tailscale.exe" -ArgumentList "/S" -Wait
+            Start-Sleep -Seconds 8
+            echo "TAILSCALE_BIN=tailscale" >> $env:GITHUB_ENV
+            exit 0
+          }
           Start-Process msiexec -ArgumentList "/i tailscale.msi /quiet /norestart" -Wait
           Start-Sleep -Seconds 8
-
-          # Find tailscale.exe
-          $tailscale = Get-ChildItem -Path "C:\Program Files\Tailscale" -Filter "tailscale.exe" -ErrorAction SilentlyContinue |
-            Select-Object -First 1 -ExpandProperty FullName
-          if (-not $tailscale) {
+          $tailscale = "C:\Program Files\Tailscale\tailscale.exe"
+          if (-not (Test-Path $tailscale)) {
             $tailscale = (Get-Command tailscale -ErrorAction SilentlyContinue).Source
           }
           echo "TAILSCALE_BIN=$tailscale" >> $env:GITHUB_ENV
@@ -145,7 +155,7 @@ jobs:
           Start-Sleep -Seconds 10
           $ip = & $tailscale ip -4
           echo "TAILSCALE_IP=$ip" >> $env:GITHUB_ENV
-          echo "✅ Tailscale IP: $ip"
+          echo "✅ Connected! Tailscale IP: $ip"
 
       - name: Print Connection Summary
         shell: powershell
@@ -184,7 +194,7 @@ jobs:
         if: always()
         shell: powershell
         run: |
-          if ($env:TAILSCALE_BIN) {
+          if ($env:TAILSCALE_BIN -and (Test-Path $env:TAILSCALE_BIN)) {
             & $env:TAILSCALE_BIN logout
             echo "✅ Tailscale disconnected"
           }
