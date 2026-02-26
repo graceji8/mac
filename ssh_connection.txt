@@ -1,4 +1,4 @@
 RDP_ADDRESS=(probing...)
-noVNC_URL=https://labor-biotechnology-cheers-claimed.trycloudflare.com/vnc.html
-CODESERVER_URL=https://quebec-subject-harder-range.trycloudflare.com
+noVNC_URL=(probing...)/vnc.html
+CODESERVER_URL=(probing...)
 USER=runneradmin
