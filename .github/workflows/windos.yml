@@ -1,5 +1,4 @@
-name: Windows Remote 
-
+name: Windows Remote
 on:
   workflow_dispatch:
     inputs:
@@ -33,64 +32,22 @@ jobs:
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -name "fDenyTSConnections" -Value 0
           Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -name "UserAuthentication" -Value 1
-          echo "RDP enabled"
+          echo "✅ RDP enabled on port 3389"
 
-      - name: Set RDP Password for runneradmin
+      - name: Set RDP Password
         shell: powershell
         run: |
           $password = "P@ssw0rd!RDP2024"
           net user runneradmin $password
-          echo "RDP_PASSWORD=$password" >> $env:GITHUB_ENV
-          echo "RDP user: runneradmin | Password: $password"
-
-      - name: Install ngrok
-        shell: powershell
-        run: |
-          Invoke-WebRequest -Uri "https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-windows-amd64.zip" -OutFile "ngrok.zip"
-          Expand-Archive -Path "ngrok.zip" -DestinationPath "C:\ngrok"
-          echo "C:\ngrok" >> $env:GITHUB_PATH
-
-      - name: Authenticate ngrok
-        shell: powershell
-        env:
-          NGROK_AUTH_TOKEN: ${{ secrets.NGROK_AUTH_TOKEN }}
-        run: |
-          C:\ngrok\ngrok.exe authtoken $env:NGROK_AUTH_TOKEN
-
-      - name: Start ngrok tunnel for RDP (port 3389)
-        shell: powershell
-        run: |
-          Start-Process -FilePath "C:\ngrok\ngrok.exe" -ArgumentList "tcp 3389 --log=stdout" -RedirectStandardOutput "C:\ngrok\rdp.log" -NoNewWindow
-          Start-Sleep -Seconds 5
-          $tunnelInfo = Invoke-RestMethod -Uri "http://localhost:4040/api/tunnels" -ErrorAction SilentlyContinue
-          $rdpUrl = $tunnelInfo.tunnels[0].public_url
-          echo "=========================================="
-          echo " RDP CONNECTION INFO"
-          echo "=========================================="
-          echo " Host: $rdpUrl"
-          echo " User: runneradmin"
-          echo " Pass: $env:RDP_PASSWORD"
-          echo "=========================================="
+          echo "✅ RDP credentials set"
 
       - name: Install TightVNC Server
         shell: powershell
         run: |
           Invoke-WebRequest -Uri "https://www.tightvnc.com/download/2.8.85/tightvnc-2.8.85-gpl-setup-64bit.msi" -OutFile "tightvnc.msi"
           Start-Process msiexec -ArgumentList "/i tightvnc.msi /quiet ADDLOCAL=Server SET_USEVNCAUTHENTICATION=1 VALUE_OF_VNCAUTHENTICATION=1 SET_PASSWORD=1 VALUE_OF_PASSWORD=vnc1234 SET_CONTROLPASSWORD=1 VALUE_OF_CONTROLPASSWORD=admin1234" -Wait
-          echo "TightVNC installed"
-
-      - name: Start VNC Server
-        shell: powershell
-        run: |
           Start-Service -Name "tvnserver" -ErrorAction SilentlyContinue
-          Start-Sleep -Seconds 3
-          echo "VNC Server started on port 5900"
-
-      - name: Start ngrok tunnel for VNC (port 5900)
-        shell: powershell
-        run: |
-          Start-Process -FilePath "C:\ngrok\ngrok.exe" -ArgumentList "tcp 5900 --log=stdout" -RedirectStandardOutput "C:\ngrok\vnc.log" -NoNewWindow
-          Start-Sleep -Seconds 5
+          echo "✅ VNC Server started on port 5900"
 
       - name: Install Node.js and code-server
         shell: powershell
@@ -98,50 +55,81 @@ jobs:
           winget install OpenJS.NodeJS.LTS --silent --accept-package-agreements --accept-source-agreements
           $env:PATH = [System.Environment]::GetEnvironmentVariable("PATH","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("PATH","User")
           npm install -g code-server
-          echo "code-server installed"
-
-      - name: Start code-server (VS Code in Browser)
-        shell: powershell
-        run: |
-          $env:PATH = [System.Environment]::GetEnvironmentVariable("PATH","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("PATH","User")
           Start-Process -FilePath "code-server" -ArgumentList "--auth password --bind-addr 0.0.0.0:8080 --password vscode1234" -NoNewWindow
+          echo "✅ code-server started on port 8080"
+
+      - name: Install Tailscale
+        shell: powershell
+        run: |
+          Invoke-WebRequest -Uri "https://pkgs.tailscale.com/stable/tailscale-setup-latest-amd64.exe" -OutFile "tailscale-setup.exe"
+          Start-Process -FilePath "tailscale-setup.exe" -ArgumentList "/S" -Wait
           Start-Sleep -Seconds 5
-          echo "code-server started on port 8080"
+          echo "✅ Tailscale installed"
 
-      - name: Start ngrok tunnel for code-server (port 8080)
+      - name: Get Tailscale OAuth Token
         shell: powershell
+        env:
+          TS_OAUTH_CLIENT_ID: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          TS_OAUTH_SECRET: ${{ secrets.TS_OAUTH_SECRET }}
         run: |
-          Start-Process -FilePath "C:\ngrok\ngrok.exe" -ArgumentList "tcp 8080 --log=stdout" -RedirectStandardOutput "C:\ngrok\vscode.log" -NoNewWindow
-          Start-Sleep -Seconds 8
-          $tunnelInfo = Invoke-RestMethod -Uri "http://localhost:4040/api/tunnels" -ErrorAction SilentlyContinue
-          echo "=========================================="
-          echo " ALL ACTIVE TUNNELS"
-          echo "=========================================="
-          $tunnelInfo.tunnels | ForEach-Object {
-            echo " $($_.name): $($_.public_url)"
+          # Exchange OAuth credentials for an auth token
+          $body = @{
+            client_id     = $env:TS_OAUTH_CLIENT_ID
+            client_secret = $env:TS_OAUTH_SECRET
+            grant_type    = "client_credentials"
+            scope         = "devices:write"
           }
-          echo " code-server password: vscode1234"
-          echo " VNC password: vnc1234"
-          echo "=========================================="
+          $response = Invoke-RestMethod `
+            -Uri "https://api.tailscale.com/api/v2/oauth/token" `
+            -Method POST `
+            -ContentType "application/x-www-form-urlencoded" `
+            -Body $body
+          $token = $response.access_token
+          echo "TS_ACCESS_TOKEN=$token" >> $env:GITHUB_ENV
+          echo "✅ OAuth token obtained"
 
-      - name: Print Full Connection Summary
+      - name: Connect to Tailscale
         shell: powershell
         run: |
-          Start-Sleep -Seconds 3
-          $tunnelInfo = Invoke-RestMethod -Uri "http://localhost:4040/api/tunnels" -ErrorAction SilentlyContinue
+          $tailscale = "C:\Program Files\Tailscale\tailscale.exe"
+          & $tailscale up `
+            --authkey=$env:TS_ACCESS_TOKEN `
+            --hostname="github-runner-${{ github.run_id }}" `
+            --accept-routes `
+            --accept-dns=false
+          Start-Sleep -Seconds 10
+
+          $ip = & $tailscale ip -4
+          echo "TAILSCALE_IP=$ip" >> $env:GITHUB_ENV
+
+          echo "=========================================="
+          echo " TAILSCALE CONNECTION INFO"
+          echo "=========================================="
+          echo " Tailscale IP : $ip"
+          echo " RDP  → $ip:3389  | User: runneradmin | Pass: P@ssw0rd!RDP2024"
+          echo " VNC  → $ip:5900  | Pass: vnc1234"
+          echo " Code → http://$ip:8080 | Pass: vscode1234"
+          echo "=========================================="
+
+      - name: Print Connection Summary
+        shell: powershell
+        run: |
           echo ""
-          echo "╔══════════════════════════════════════════╗"
-          echo "║      REMOTE ACCESS CONNECTION SUMMARY    ║"
-          echo "╠══════════════════════════════════════════╣"
-          $tunnelInfo.tunnels | ForEach-Object {
-            echo "║ $($_.name): $($_.public_url)"
-          }
-          echo "╠══════════════════════════════════════════╣"
-          echo "║ RDP  User: runneradmin                   ║"
-          echo "║ RDP  Pass: P@ssw0rd!RDP2024              ║"
-          echo "║ VNC  Pass: vnc1234                       ║"
-          echo "║ Code Pass: vscode1234                    ║"
-          echo "╚══════════════════════════════════════════╝"
+          echo "╔══════════════════════════════════════════════════╗"
+          echo "║         REMOTE ACCESS CONNECTION SUMMARY         ║"
+          echo "╠══════════════════════════════════════════════════╣"
+          echo "║ Tailscale IP : $env:TAILSCALE_IP"
+          echo "╠══════════════════════════════════════════════════╣"
+          echo "║ RDP  → $env:TAILSCALE_IP:3389"
+          echo "║   User : runneradmin"
+          echo "║   Pass : P@ssw0rd!RDP2024"
+          echo "╠══════════════════════════════════════════════════╣"
+          echo "║ VNC  → $env:TAILSCALE_IP:5900"
+          echo "║   Pass : vnc1234"
+          echo "╠══════════════════════════════════════════════════╣"
+          echo "║ Code → http://$env:TAILSCALE_IP:8080"
+          echo "║   Pass : vscode1234"
+          echo "╚══════════════════════════════════════════════════╝"
 
       - name: Keep session alive
         shell: powershell
@@ -149,7 +137,7 @@ jobs:
           $minutes = [int]"${{ github.event.inputs.session_duration }}"
           if ($minutes -gt 350) { $minutes = 350 }
           $seconds = $minutes * 60
-          echo "Session will stay alive for $minutes minutes..."
+          echo "⏱ Session will stay alive for $minutes minutes..."
           $interval = 30
           $elapsed = 0
           while ($elapsed -lt $seconds) {
@@ -158,4 +146,4 @@ jobs:
             $remaining = [math]::Round(($seconds - $elapsed) / 60, 1)
             echo "[$elapsed s elapsed] ~$remaining min remaining"
           }
-          echo "Session ended."
+          echo "🔴 Session ended."
