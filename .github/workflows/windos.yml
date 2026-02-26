@@ -48,16 +48,20 @@ jobs:
       - name: Install TightVNC Server
         shell: powershell
         run: |
-          Invoke-WebRequest `
-            -Uri "https://www.tightvnc.com/download/2.8.85/tightvnc-2.8.85-gpl-setup-64bit.msi" `
-            -OutFile "tightvnc.msi"
-          Start-Process msiexec -ArgumentList `
-            "/i tightvnc.msi /quiet ADDLOCAL=Server `
-            SET_USEVNCAUTHENTICATION=1 VALUE_OF_VNCAUTHENTICATION=1 `
-            SET_PASSWORD=1 VALUE_OF_PASSWORD=vnc1234 `
-            SET_CONTROLPASSWORD=1 VALUE_OF_CONTROLPASSWORD=admin1234" -Wait
-          Start-Service -Name "tvnserver" -ErrorAction SilentlyContinue
-          echo "✅ VNC Server started on port 5900 | Pass: vnc1234"
+          # Try TightVNC first, fallback to skip if slow
+          try {
+            $ProgressPreference = 'SilentlyContinue'  # speeds up downloads massively
+            Invoke-WebRequest `
+              -Uri "https://www.tightvnc.com/download/2.8.85/tightvnc-2.8.85-gpl-setup-64bit.msi" `
+              -OutFile "tightvnc.msi" `
+              -TimeoutSec 60
+            Start-Process msiexec -ArgumentList `
+              "/i tightvnc.msi /quiet ADDLOCAL=Server SET_USEVNCAUTHENTICATION=1 VALUE_OF_VNCAUTHENTICATION=1 SET_PASSWORD=1 VALUE_OF_PASSWORD=vnc1234 SET_CONTROLPASSWORD=1 VALUE_OF_CONTROLPASSWORD=admin1234" -Wait
+            Start-Service -Name "tvnserver" -ErrorAction SilentlyContinue
+            echo "✅ VNC Server started on port 5900"
+          } catch {
+            echo "⚠️ VNC install skipped (timeout) - use RDP instead"
+          }
 
       - name: Install OpenVSCode Server
         shell: powershell
