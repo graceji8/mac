@@ -25,13 +25,13 @@ jobs:
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -name "fDenyTSConnections" -Value 0
           Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -name "UserAuthentication" -Value 1
-          echo "✅ RDP enabled on port 3389"
+          echo "✅ RDP enabled"
 
       - name: Set RDP Password
         shell: powershell
         run: |
           net user runneradmin "P@ssw0rd!RDP2024"
-          echo "✅ RDP ready | User: runneradmin | Pass: P@ssw0rd!RDP2024"
+          echo "✅ User: runneradmin | Pass: P@ssw0rd!RDP2024"
 
       - name: Install TightVNC Server
         shell: powershell
@@ -46,106 +46,102 @@ jobs:
             echo "⚠️ VNC skipped: $_"
           }
 
-      - name: Start Pinggy Tunnel for RDP
+      - name: Start Pinggy Tunnels
         shell: powershell
         run: |
-          # Generate SSH key silently to avoid password prompts
-          if (-not (Test-Path "$env:USERPROFILE\.ssh\id_rsa")) {
-            ssh-keygen -t rsa -b 2048 -f "$env:USERPROFILE\.ssh\id_rsa" -N '""' | Out-Null
-          }
+          $ProgressPreference = 'SilentlyContinue'
 
-          # Start RDP tunnel in background
-          $rdpJob = Start-Job -ScriptBlock {
-            ssh -p 443 `
-              -R "0:127.0.0.1:3389" `
-              -o "StrictHostKeyChecking=no" `
-              -o "ServerAliveInterval=30" `
-              -o "ServerAliveCountMax=10" `
-              -o "ExitOnForwardFailure=yes" `
-              tcp@free.pinggy.io 2>&1
-          }
+          # Create .ssh dir
+          $sshDir = "$env:USERPROFILE\.ssh"
+          New-Item -ItemType Directory -Path $sshDir -Force | Out-Null
+          echo "✅ .ssh dir ready: $sshDir"
 
-          # Wait for tunnel URL to appear in output
+          # Disable strict host checking globally
+          $sshConfig = "$sshDir\config"
+          @"
+Host free.pinggy.io
+    StrictHostKeyChecking no
+    UserKnownHostsFile NUL
+    ServerAliveInterval 30
+    ServerAliveCountMax 10
+"@ | Out-File -FilePath $sshConfig -Encoding utf8
+
+          # Start RDP tunnel
+          $rdpLog = "C:\rdp.log"
+          New-Item -ItemType File -Path $rdpLog -Force | Out-Null
+          Start-Process -FilePath "ssh" `
+            -ArgumentList "-p 443 -R 0:127.0.0.1:3389 tcp@free.pinggy.io" `
+            -RedirectStandardOutput $rdpLog `
+            -RedirectStandardError $rdpLog `
+            -NoNewWindow
+          echo "✅ RDP tunnel process started"
+
+          # Wait for RDP URL
           $rdpUrl = ""
-          $timeout = 30
-          $elapsed = 0
-          while ($elapsed -lt $timeout) {
-            Start-Sleep -Seconds 2
-            $elapsed += 2
-            $output = Receive-Job $rdpJob -Keep
-            $line = $output | Where-Object { $_ -match "tcp://" } | Select-Object -Last 1
-            if ($line -match "(tcp://[^\s]+)") {
-              $rdpUrl = $matches[1]
+          for ($i = 0; $i -lt 20; $i++) {
+            Start-Sleep -Seconds 3
+            $content = Get-Content $rdpLog -Raw -ErrorAction SilentlyContinue
+            echo "RDP log [$i]: $content"
+            if ($content -match "tcp://\S+") {
+              $rdpUrl = $matches[0]
               break
             }
           }
 
-          echo "RDP_URL=$rdpUrl" >> $env:GITHUB_ENV
-          echo "✅ RDP Tunnel: $rdpUrl"
-
-      - name: Start Pinggy Tunnel for VNC
-        shell: powershell
-        run: |
-          # Start VNC tunnel in background
-          $vncJob = Start-Job -ScriptBlock {
-            ssh -p 443 `
-              -R "0:127.0.0.1:5900" `
-              -o "StrictHostKeyChecking=no" `
-              -o "ServerAliveInterval=30" `
-              -o "ServerAliveCountMax=10" `
-              tcp@free.pinggy.io 2>&1
+          if (-not $rdpUrl) {
+            echo "❌ Could not get RDP URL. Final log:"
+            Get-Content $rdpLog
+            exit 1
           }
 
-          # Wait for tunnel URL
+          # Start VNC tunnel
+          $vncLog = "C:\vnc.log"
+          New-Item -ItemType File -Path $vncLog -Force | Out-Null
+          Start-Process -FilePath "ssh" `
+            -ArgumentList "-p 443 -R 0:127.0.0.1:5900 tcp@free.pinggy.io" `
+            -RedirectStandardOutput $vncLog `
+            -RedirectStandardError $vncLog `
+            -NoNewWindow
+
+          # Wait for VNC URL
           $vncUrl = ""
-          $timeout = 30
-          $elapsed = 0
-          while ($elapsed -lt $timeout) {
-            Start-Sleep -Seconds 2
-            $elapsed += 2
-            $output = Receive-Job $vncJob -Keep
-            $line = $output | Where-Object { $_ -match "tcp://" } | Select-Object -Last 1
-            if ($line -match "(tcp://[^\s]+)") {
-              $vncUrl = $matches[1]
+          for ($i = 0; $i -lt 20; $i++) {
+            Start-Sleep -Seconds 3
+            $content = Get-Content $vncLog -Raw -ErrorAction SilentlyContinue
+            if ($content -match "tcp://\S+") {
+              $vncUrl = $matches[0]
               break
             }
           }
 
-          echo "VNC_URL=$vncUrl" >> $env:GITHUB_ENV
-          echo "✅ VNC Tunnel: $vncUrl"
+          "RDP_URL=$rdpUrl" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "VNC_URL=$vncUrl" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+          echo ""
+          echo "✅ RDP: $rdpUrl"
+          echo "✅ VNC: $vncUrl"
 
       - name: Print Connection Summary
         shell: powershell
         run: |
-          # Parse RDP host and port
           if ($env:RDP_URL -match "tcp://([^:]+):(\d+)") {
-            $rdpHost = $matches[1]
-            $rdpPort = $matches[2]
+            $rdpHost = $matches[1]; $rdpPort = $matches[2]
           }
           if ($env:VNC_URL -match "tcp://([^:]+):(\d+)") {
-            $vncHost = $matches[1]
-            $vncPort = $matches[2]
+            $vncHost = $matches[1]; $vncPort = $matches[2]
           }
-
           echo ""
-          echo "╔══════════════════════════════════════════════════════════╗"
-          echo "║           REMOTE ACCESS CONNECTION SUMMARY               ║"
-          echo "╠══════════════════════════════════════════════════════════╣"
-          echo "║  RDP (Microsoft Remote Desktop)"
+          echo "╔══════════════════════════════════════════════╗"
+          echo "║        REMOTE ACCESS CONNECTION INFO         ║"
+          echo "╠══════════════════════════════════════════════╣"
+          echo "║  RDP → Open 'Remote Desktop Connection'"
           echo "║    Host : $rdpHost"
           echo "║    Port : $rdpPort"
           echo "║    User : runneradmin"
           echo "║    Pass : P@ssw0rd!RDP2024"
-          echo "╠══════════════════════════════════════════════════════════╣"
-          echo "║  VNC"
-          echo "║    Host : $vncHost"
-          echo "║    Port : $vncPort"
-          echo "║    Pass : vnc1234"
-          echo "╠══════════════════════════════════════════════════════════╣"
-          echo "║  HOW TO CONNECT VIA RDP:"
-          echo "║    Open: mstsc.exe"
-          echo "║    Enter: $rdpHost`:$rdpPort"
-          echo "╚══════════════════════════════════════════════════════════╝"
+          echo "╠══════════════════════════════════════════════╣"
+          echo "║  VNC → $vncHost`:$vncPort  Pass: vnc1234"
+          echo "╚══════════════════════════════════════════════╝"
 
       - name: Keep session alive
         shell: powershell
@@ -155,11 +151,11 @@ jobs:
           $seconds = $minutes * 60
           $interval = 30
           $elapsed = 0
-          echo "⏱ Session alive for $minutes minutes. Connect now!"
+          echo "⏱ Session alive for $minutes minutes"
           while ($elapsed -lt $seconds) {
             Start-Sleep -Seconds $interval
             $elapsed += $interval
             $remaining = [math]::Round(($seconds - $elapsed) / 60, 1)
-            echo "[$elapsed s] ~$remaining min remaining | RDP: $env:RDP_URL"
+            echo "[$elapsed s] ~$remaining min | RDP: $env:RDP_URL"
           }
           echo "🔴 Session ended"
