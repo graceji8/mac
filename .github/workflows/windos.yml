@@ -92,43 +92,6 @@ jobs:
             echo "⚠️ OpenVSCode skipped: $_"
           }
 
-      - name: Connect to Tailscale
-        shell: powershell
-        run: |
-          $tailscale = $env:TAILSCALE_BIN
-          echo "Tailscale binary: $tailscale"
-
-          # Check tailscale service is running
-          Start-Service -Name "Tailscale" -ErrorAction SilentlyContinue
-          Start-Sleep -Seconds 3
-
-          # Run tailscale up and capture output
-          echo "Running tailscale up..."
-          $output = & $tailscale up `
-            --authkey=$env:TS_ACCESS_TOKEN `
-            --hostname="github-runner-${{ github.run_id }}" `
-            --accept-routes `
-            --accept-dns=false 2>&1
-          echo "Output: $output"
-          Start-Sleep -Seconds 15
-
-          # Check status
-          $status = & $tailscale status 2>&1
-          echo "Status: $status"
-
-          # Get IP
-          $ip = & $tailscale ip -4 2>&1
-          echo "IP result: $ip"
-
-          if ($ip -match '\d+\.\d+\.\d+\.\d+') {
-            echo "TAILSCALE_IP=$ip" >> $env:GITHUB_ENV
-            echo "✅ Connected! Tailscale IP: $ip"
-          } else {
-            echo "❌ Failed to get IP. Full status:"
-            & $tailscale status --json 2>&1
-            exit 1
-          }
-
       - name: Install Tailscale
         shell: powershell
         run: |
@@ -182,16 +145,38 @@ jobs:
         shell: powershell
         run: |
           $tailscale = $env:TAILSCALE_BIN
-          echo "Using Tailscale at: $tailscale"
-          & $tailscale up `
+          echo "Tailscale binary: $tailscale"
+
+          # Check tailscale service is running
+          Start-Service -Name "Tailscale" -ErrorAction SilentlyContinue
+          Start-Sleep -Seconds 3
+
+          # Run tailscale up and capture output
+          echo "Running tailscale up..."
+          $output = & $tailscale up `
             --authkey=$env:TS_ACCESS_TOKEN `
             --hostname="github-runner-${{ github.run_id }}" `
             --accept-routes `
-            --accept-dns=false
-          Start-Sleep -Seconds 10
-          $ip = & $tailscale ip -4
-          echo "TAILSCALE_IP=$ip" >> $env:GITHUB_ENV
-          echo "✅ Connected! Tailscale IP: $ip"
+            --accept-dns=false 2>&1
+          echo "Output: $output"
+          Start-Sleep -Seconds 15
+
+          # Check status
+          $status = & $tailscale status 2>&1
+          echo "Status: $status"
+
+          # Get IP
+          $ip = & $tailscale ip -4 2>&1
+          echo "IP result: $ip"
+
+          if ($ip -match '\d+\.\d+\.\d+\.\d+') {
+            echo "TAILSCALE_IP=$ip" >> $env:GITHUB_ENV
+            echo "✅ Connected! Tailscale IP: $ip"
+          } else {
+            echo "❌ Failed to get IP. Full status:"
+            & $tailscale status --json 2>&1
+            exit 1
+          }
 
       - name: Print Connection Summary
         shell: powershell
@@ -230,7 +215,8 @@ jobs:
         if: always()
         shell: powershell
         run: |
-          if ($env:TAILSCALE_BIN -and (Test-Path $env:TAILSCALE_BIN)) {
-            & $env:TAILSCALE_BIN logout
+          $tailscale = $env:TAILSCALE_BIN
+          if ($tailscale -and (Test-Path $tailscale)) {
+            & "$tailscale" logout
             echo "✅ Tailscale disconnected"
           }
