@@ -1,4 +1,4 @@
-name: Windows Remote Dev (RDP + VNC + OpenVSCode)
+name: Windows Remote Dev (RDP + VNC + Pinggy)
 
 on:
   workflow_dispatch:
@@ -19,157 +19,133 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set Session Duration
-        shell: powershell
-        run: |
-          $duration = [int]"${{ github.event.inputs.session_duration }}"
-          if ($duration -gt 350) { $duration = 350 }
-          echo "SESSION_MINUTES=$duration" >> $env:GITHUB_ENV
-          echo "Session will run for $duration minutes"
-
       - name: Enable RDP
         shell: powershell
         run: |
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' `
-            -name "fDenyTSConnections" -Value 0
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -name "fDenyTSConnections" -Value 0
           Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
-            -name "UserAuthentication" -Value 1
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -name "UserAuthentication" -Value 1
           echo "✅ RDP enabled on port 3389"
 
       - name: Set RDP Password
         shell: powershell
         run: |
-          $password = "P@ssw0rd!RDP2024"
-          net user runneradmin $password
-          echo "RDP_PASSWORD=$password" >> $env:GITHUB_ENV
-          echo "✅ RDP credentials set | User: runneradmin | Pass: $password"
+          net user runneradmin "P@ssw0rd!RDP2024"
+          echo "✅ RDP ready | User: runneradmin | Pass: P@ssw0rd!RDP2024"
 
       - name: Install TightVNC Server
         shell: powershell
         run: |
-          # Try TightVNC first, fallback to skip if slow
+          $ProgressPreference = 'SilentlyContinue'
           try {
-            $ProgressPreference = 'SilentlyContinue'  # speeds up downloads massively
-            Invoke-WebRequest `
-              -Uri "https://www.tightvnc.com/download/2.8.85/tightvnc-2.8.85-gpl-setup-64bit.msi" `
-              -OutFile "tightvnc.msi" `
-              -TimeoutSec 60
-            Start-Process msiexec -ArgumentList `
-              "/i tightvnc.msi /quiet ADDLOCAL=Server SET_USEVNCAUTHENTICATION=1 VALUE_OF_VNCAUTHENTICATION=1 SET_PASSWORD=1 VALUE_OF_PASSWORD=vnc1234 SET_CONTROLPASSWORD=1 VALUE_OF_CONTROLPASSWORD=admin1234" -Wait
+            Invoke-WebRequest -Uri "https://www.tightvnc.com/download/2.8.85/tightvnc-2.8.85-gpl-setup-64bit.msi" -OutFile "tightvnc.msi" -TimeoutSec 60
+            Start-Process msiexec -ArgumentList "/i tightvnc.msi /quiet ADDLOCAL=Server SET_USEVNCAUTHENTICATION=1 VALUE_OF_VNCAUTHENTICATION=1 SET_PASSWORD=1 VALUE_OF_PASSWORD=vnc1234 SET_CONTROLPASSWORD=1 VALUE_OF_CONTROLPASSWORD=admin1234" -Wait
             Start-Service -Name "tvnserver" -ErrorAction SilentlyContinue
-            echo "✅ VNC Server started on port 5900"
+            echo "✅ VNC started on port 5900"
           } catch {
-            echo "⚠️ VNC install skipped (timeout) - use RDP instead"
+            echo "⚠️ VNC skipped: $_"
           }
 
-      - name: Install OpenVSCode Server
+      - name: Start Pinggy Tunnel for RDP
         shell: powershell
         run: |
-          $ProgressPreference = 'SilentlyContinue'
-          try {
-            # Fetch all releases and find win32-x64 asset
-            $headers = @{ "User-Agent" = "GitHubActions" }
-            for ($page = 1; $page -le 5; $page++) {
-              $releases = Invoke-RestMethod -Uri "https://api.github.com/repos/gitpod-io/openvscode-server/releases?per_page=10&page=$page" -Headers $headers
-              foreach ($release in $releases) {
-                $asset = $release.assets | Where-Object { $_.name -match "win32-x64\.tar\.gz$" } | Select-Object -First 1
-                if ($asset) {
-                  echo "Found: $($release.tag_name) → $($asset.name)"
-                  Invoke-WebRequest -Uri $asset.browser_download_url -OutFile "openvscode.tar.gz" -Headers $headers -TimeoutSec 180
-                  tar -xzf "openvscode.tar.gz"
-                  $serverDir = Get-ChildItem -Directory -Filter "openvscode-server-*" | Select-Object -First 1 -ExpandProperty FullName
-                  Start-Process -FilePath "$serverDir\bin\openvscode-server.cmd" `
-                    -ArgumentList "--port 8080 --without-connection-token --host 0.0.0.0" -NoNewWindow
-                  Start-Sleep -Seconds 5
-                  echo "✅ OpenVSCode Server started on port 8080"
-                  exit 0
-                }
-              }
+          # Generate SSH key silently to avoid password prompts
+          if (-not (Test-Path "$env:USERPROFILE\.ssh\id_rsa")) {
+            ssh-keygen -t rsa -b 2048 -f "$env:USERPROFILE\.ssh\id_rsa" -N '""' | Out-Null
+          }
+
+          # Start RDP tunnel in background
+          $rdpJob = Start-Job -ScriptBlock {
+            ssh -p 443 `
+              -R "0:127.0.0.1:3389" `
+              -o "StrictHostKeyChecking=no" `
+              -o "ServerAliveInterval=30" `
+              -o "ServerAliveCountMax=10" `
+              -o "ExitOnForwardFailure=yes" `
+              tcp@free.pinggy.io 2>&1
+          }
+
+          # Wait for tunnel URL to appear in output
+          $rdpUrl = ""
+          $timeout = 30
+          $elapsed = 0
+          while ($elapsed -lt $timeout) {
+            Start-Sleep -Seconds 2
+            $elapsed += 2
+            $output = Receive-Job $rdpJob -Keep
+            $line = $output | Where-Object { $_ -match "tcp://" } | Select-Object -Last 1
+            if ($line -match "(tcp://[^\s]+)") {
+              $rdpUrl = $matches[1]
+              break
             }
-            throw "No win32-x64 asset found in any release"
-          } catch {
-            echo "⚠️ OpenVSCode skipped: $_"
           }
 
-      - name: Install Tailscale
+          echo "RDP_URL=$rdpUrl" >> $env:GITHUB_ENV
+          echo "✅ RDP Tunnel: $rdpUrl"
+
+      - name: Start Pinggy Tunnel for VNC
         shell: powershell
         run: |
-          $ProgressPreference = 'SilentlyContinue'
-          # Use official Tailscale GitHub Action approach - hardcoded stable version
-          $version = "1.92.1"
-          $url = "https://pkgs.tailscale.com/stable/tailscale-setup-${version}-amd64.msi"
-          echo "Downloading Tailscale v$version..."
-          try {
-            Invoke-WebRequest -Uri $url -OutFile "tailscale.msi" -TimeoutSec 120
-          } catch {
-            # Fallback to exe installer
-            echo "MSI failed, trying exe..."
-            $url2 = "https://pkgs.tailscale.com/stable/tailscale-setup-${version}.exe"
-            Invoke-WebRequest -Uri $url2 -OutFile "tailscale.exe" -TimeoutSec 120
-            Start-Process -FilePath "tailscale.exe" -ArgumentList "/S" -Wait
-            Start-Sleep -Seconds 8
-            echo "TAILSCALE_BIN=tailscale" >> $env:GITHUB_ENV
-            exit 0
+          # Start VNC tunnel in background
+          $vncJob = Start-Job -ScriptBlock {
+            ssh -p 443 `
+              -R "0:127.0.0.1:5900" `
+              -o "StrictHostKeyChecking=no" `
+              -o "ServerAliveInterval=30" `
+              -o "ServerAliveCountMax=10" `
+              tcp@free.pinggy.io 2>&1
           }
-          Start-Process msiexec -ArgumentList "/i tailscale.msi /quiet /norestart" -Wait
-          Start-Sleep -Seconds 8
-          $tailscale = "C:\Program Files\Tailscale\tailscale.exe"
-          if (-not (Test-Path $tailscale)) {
-            $tailscale = (Get-Command tailscale -ErrorAction SilentlyContinue).Source
+
+          # Wait for tunnel URL
+          $vncUrl = ""
+          $timeout = 30
+          $elapsed = 0
+          while ($elapsed -lt $timeout) {
+            Start-Sleep -Seconds 2
+            $elapsed += 2
+            $output = Receive-Job $vncJob -Keep
+            $line = $output | Where-Object { $_ -match "tcp://" } | Select-Object -Last 1
+            if ($line -match "(tcp://[^\s]+)") {
+              $vncUrl = $matches[1]
+              break
+            }
           }
-          echo "TAILSCALE_BIN=$tailscale" >> $env:GITHUB_ENV
-          echo "✅ Tailscale installed at: $tailscale"
 
-      - name: Get Tailscale OAuth Token
-        shell: powershell
-        env:
-          TS_OAUTH_CLIENT_ID: ${{ secrets.TS_OAUTH_CLIENT_ID }}
-          TS_OAUTH_SECRET: ${{ secrets.TS_OAUTH_SECRET }}
-        run: |
-          $body = @{
-            client_id     = $env:TS_OAUTH_CLIENT_ID
-            client_secret = $env:TS_OAUTH_SECRET
-            grant_type    = "client_credentials"
-            scope         = "devices:write"
-          }
-          $response = Invoke-RestMethod `
-            -Uri "https://api.tailscale.com/api/v2/oauth/token" `
-            -Method POST `
-            -ContentType "application/x-www-form-urlencoded" `
-            -Body $body
-          echo "TS_ACCESS_TOKEN=$($response.access_token)" >> $env:GITHUB_ENV
-          echo "✅ OAuth token obtained"
-
-      - name: Connect to Tailscale
-        uses: tailscale/github-action@v2
-        with:
-          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
-          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
-          tags: tag:ci
-          hostname: github-runner-${{ github.run_id }}
-
-      - name: Get Tailscale IP
-        shell: powershell
-        run: |
-          Start-Sleep -Seconds 5
-          $ip = tailscale ip -4
-          "TAILSCALE_IP=$ip" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          echo "✅ Tailscale IP: $ip"
+          echo "VNC_URL=$vncUrl" >> $env:GITHUB_ENV
+          echo "✅ VNC Tunnel: $vncUrl"
 
       - name: Print Connection Summary
         shell: powershell
         run: |
+          # Parse RDP host and port
+          if ($env:RDP_URL -match "tcp://([^:]+):(\d+)") {
+            $rdpHost = $matches[1]
+            $rdpPort = $matches[2]
+          }
+          if ($env:VNC_URL -match "tcp://([^:]+):(\d+)") {
+            $vncHost = $matches[1]
+            $vncPort = $matches[2]
+          }
+
           echo ""
-          echo "╔══════════════════════════════════════════════╗"
-          echo "║        REMOTE ACCESS CONNECTION INFO         ║"
-          echo "╠══════════════════════════════════════════════╣"
-          echo "║  RDP  → $env:TAILSCALE_IP:3389"
-          echo "║  User : runneradmin"
-          echo "║  Pass : P@ssw0rd!RDP2024"
-          echo "╠══════════════════════════════════════════════╣"
-          echo "║  VNC  → $env:TAILSCALE_IP:5900  Pass: vnc1234"
-          echo "╚══════════════════════════════════════════════╝"
+          echo "╔══════════════════════════════════════════════════════════╗"
+          echo "║           REMOTE ACCESS CONNECTION SUMMARY               ║"
+          echo "╠══════════════════════════════════════════════════════════╣"
+          echo "║  RDP (Microsoft Remote Desktop)"
+          echo "║    Host : $rdpHost"
+          echo "║    Port : $rdpPort"
+          echo "║    User : runneradmin"
+          echo "║    Pass : P@ssw0rd!RDP2024"
+          echo "╠══════════════════════════════════════════════════════════╣"
+          echo "║  VNC"
+          echo "║    Host : $vncHost"
+          echo "║    Port : $vncPort"
+          echo "║    Pass : vnc1234"
+          echo "╠══════════════════════════════════════════════════════════╣"
+          echo "║  HOW TO CONNECT VIA RDP:"
+          echo "║    Open: mstsc.exe"
+          echo "║    Enter: $rdpHost`:$rdpPort"
+          echo "╚══════════════════════════════════════════════════════════╝"
 
       - name: Keep session alive
         shell: powershell
@@ -179,11 +155,11 @@ jobs:
           $seconds = $minutes * 60
           $interval = 30
           $elapsed = 0
-          echo "⏱ Session alive for $minutes minutes"
+          echo "⏱ Session alive for $minutes minutes. Connect now!"
           while ($elapsed -lt $seconds) {
             Start-Sleep -Seconds $interval
             $elapsed += $interval
             $remaining = [math]::Round(($seconds - $elapsed) / 60, 1)
-            echo "[$elapsed s] ~$remaining min remaining"
+            echo "[$elapsed s] ~$remaining min remaining | RDP: $env:RDP_URL"
           }
           echo "🔴 Session ended"
