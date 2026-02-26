@@ -1,4 +1,5 @@
-name: Windows Remote
+name: Windows Remote Dev (RDP + VNC + OpenVSCode)
+
 on:
   workflow_dispatch:
     inputs:
@@ -29,9 +30,11 @@ jobs:
       - name: Enable RDP
         shell: powershell
         run: |
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -name "fDenyTSConnections" -Value 0
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' `
+            -name "fDenyTSConnections" -Value 0
           Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -name "UserAuthentication" -Value 1
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
+            -name "UserAuthentication" -Value 1
           echo "✅ RDP enabled on port 3389"
 
       - name: Set RDP Password
@@ -39,48 +42,53 @@ jobs:
         run: |
           $password = "P@ssw0rd!RDP2024"
           net user runneradmin $password
-          echo "✅ RDP credentials set"
+          echo "RDP_PASSWORD=$password" >> $env:GITHUB_ENV
+          echo "✅ RDP credentials set | User: runneradmin | Pass: $password"
 
       - name: Install TightVNC Server
         shell: powershell
         run: |
-          Invoke-WebRequest -Uri "https://www.tightvnc.com/download/2.8.85/tightvnc-2.8.85-gpl-setup-64bit.msi" -OutFile "tightvnc.msi"
-          Start-Process msiexec -ArgumentList "/i tightvnc.msi /quiet ADDLOCAL=Server SET_USEVNCAUTHENTICATION=1 VALUE_OF_VNCAUTHENTICATION=1 SET_PASSWORD=1 VALUE_OF_PASSWORD=vnc1234 SET_CONTROLPASSWORD=1 VALUE_OF_CONTROLPASSWORD=admin1234" -Wait
+          Invoke-WebRequest `
+            -Uri "https://www.tightvnc.com/download/2.8.85/tightvnc-2.8.85-gpl-setup-64bit.msi" `
+            -OutFile "tightvnc.msi"
+          Start-Process msiexec -ArgumentList `
+            "/i tightvnc.msi /quiet ADDLOCAL=Server `
+            SET_USEVNCAUTHENTICATION=1 VALUE_OF_VNCAUTHENTICATION=1 `
+            SET_PASSWORD=1 VALUE_OF_PASSWORD=vnc1234 `
+            SET_CONTROLPASSWORD=1 VALUE_OF_CONTROLPASSWORD=admin1234" -Wait
           Start-Service -Name "tvnserver" -ErrorAction SilentlyContinue
-          echo "✅ VNC Server started on port 5900"
+          echo "✅ VNC Server started on port 5900 | Pass: vnc1234"
 
-      - name: Install Node.js 18 and code-server
+      - name: Install OpenVSCode Server
         shell: powershell
         run: |
-          # Uninstall current Node.js (v24 is too new for code-server)
-          winget uninstall OpenJS.NodeJS.LTS --silent --accept-source-agreements
-          Start-Sleep -Seconds 3
-
-          # Install Node.js 18 LTS (compatible with code-server)
-          Invoke-WebRequest -Uri "https://nodejs.org/dist/v18.20.4/node-v18.20.4-x64.msi" -OutFile "node18.msi"
-          Start-Process msiexec -ArgumentList "/i node18.msi /quiet /norestart" -Wait
+          $version = "1.89.1"
+          $url = "https://github.com/gitpod-io/openvscode-server/releases/download/openvscode-server-v$version/openvscode-server-v$version-win32-x64.tar.gz"
+          Invoke-WebRequest -Uri $url -OutFile "openvscode.tar.gz"
+          tar -xzf "openvscode.tar.gz"
+          $serverDir = "openvscode-server-v$version-win32-x64"
+          Start-Process -FilePath "$serverDir\bin\openvscode-server.cmd" `
+            -ArgumentList "--port 8080 --without-connection-token --host 0.0.0.0" `
+            -NoNewWindow
           Start-Sleep -Seconds 5
+          echo "✅ OpenVSCode Server started on port 8080 (no password needed)"
 
-          # Refresh PATH
-          $env:PATH = [System.Environment]::GetEnvironmentVariable("PATH","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("PATH","User")
-
-          # Verify node version
-          node --version
-
-          # Install code-server
-          npm install -g code-server --unsafe-perm
-
-          # Start code-server
-          $env:PATH = [System.Environment]::GetEnvironmentVariable("PATH","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("PATH","User")
-          $codeServer = (Get-Command code-server).Source
-          Start-Process -FilePath "node" -ArgumentList "$codeServer --auth password --bind-addr 0.0.0.0:8080 --password vscode1234" -NoNewWindow
-          Start-Sleep -Seconds 5
-          echo "✅ code-server started on port 8080"
+      - name: Install VS Code on Desktop
+        shell: powershell
+        run: |
+          Invoke-WebRequest `
+            -Uri "https://code.visualstudio.com/sha/download?build=stable&os=win32-x64-user" `
+            -OutFile "vscode-installer.exe"
+          Start-Process -FilePath "vscode-installer.exe" `
+            -ArgumentList "/VERYSILENT /NORESTART /MERGETASKS=!runcode" -Wait
+          echo "✅ VS Code installed on desktop (accessible via RDP)"
 
       - name: Install Tailscale
         shell: powershell
         run: |
-          Invoke-WebRequest -Uri "https://pkgs.tailscale.com/stable/tailscale-setup-latest-amd64.exe" -OutFile "tailscale-setup.exe"
+          Invoke-WebRequest `
+            -Uri "https://pkgs.tailscale.com/stable/tailscale-setup-latest-amd64.exe" `
+            -OutFile "tailscale-setup.exe"
           Start-Process -FilePath "tailscale-setup.exe" -ArgumentList "/S" -Wait
           Start-Sleep -Seconds 5
           echo "✅ Tailscale installed"
@@ -91,7 +99,6 @@ jobs:
           TS_OAUTH_CLIENT_ID: ${{ secrets.TS_OAUTH_CLIENT_ID }}
           TS_OAUTH_SECRET: ${{ secrets.TS_OAUTH_SECRET }}
         run: |
-          # Exchange OAuth credentials for an auth token
           $body = @{
             client_id     = $env:TS_OAUTH_CLIENT_ID
             client_secret = $env:TS_OAUTH_SECRET
@@ -105,7 +112,7 @@ jobs:
             -Body $body
           $token = $response.access_token
           echo "TS_ACCESS_TOKEN=$token" >> $env:GITHUB_ENV
-          echo "✅ OAuth token obtained"
+          echo "✅ Tailscale OAuth token obtained"
 
       - name: Connect to Tailscale
         shell: powershell
@@ -117,38 +124,36 @@ jobs:
             --accept-routes `
             --accept-dns=false
           Start-Sleep -Seconds 10
-
           $ip = & $tailscale ip -4
           echo "TAILSCALE_IP=$ip" >> $env:GITHUB_ENV
-
-          echo "=========================================="
-          echo " TAILSCALE CONNECTION INFO"
-          echo "=========================================="
-          echo " Tailscale IP : $ip"
-          echo " RDP  → $ip:3389  | User: runneradmin | Pass: P@ssw0rd!RDP2024"
-          echo " VNC  → $ip:5900  | Pass: vnc1234"
-          echo " Code → http://$ip:8080 | Pass: vscode1234"
-          echo "=========================================="
+          echo "✅ Connected to Tailscale | IP: $ip"
 
       - name: Print Connection Summary
         shell: powershell
         run: |
           echo ""
-          echo "╔══════════════════════════════════════════════════╗"
-          echo "║         REMOTE ACCESS CONNECTION SUMMARY         ║"
-          echo "╠══════════════════════════════════════════════════╣"
-          echo "║ Tailscale IP : $env:TAILSCALE_IP"
-          echo "╠══════════════════════════════════════════════════╣"
-          echo "║ RDP  → $env:TAILSCALE_IP:3389"
-          echo "║   User : runneradmin"
-          echo "║   Pass : P@ssw0rd!RDP2024"
-          echo "╠══════════════════════════════════════════════════╣"
-          echo "║ VNC  → $env:TAILSCALE_IP:5900"
-          echo "║   Pass : vnc1234"
-          echo "╠══════════════════════════════════════════════════╣"
-          echo "║ Code → http://$env:TAILSCALE_IP:8080"
-          echo "║   Pass : vscode1234"
-          echo "╚══════════════════════════════════════════════════╝"
+          echo "╔══════════════════════════════════════════════════════════╗"
+          echo "║           REMOTE ACCESS CONNECTION SUMMARY               ║"
+          echo "╠══════════════════════════════════════════════════════════╣"
+          echo "║  Tailscale IP : $env:TAILSCALE_IP"
+          echo "╠══════════════════════════════════════════════════════════╣"
+          echo "║  RDP (Microsoft Remote Desktop)"
+          echo "║    Host : $env:TAILSCALE_IP"
+          echo "║    Port : 3389"
+          echo "║    User : runneradmin"
+          echo "║    Pass : P@ssw0rd!RDP2024"
+          echo "╠══════════════════════════════════════════════════════════╣"
+          echo "║  VNC"
+          echo "║    Host : $env:TAILSCALE_IP:5900"
+          echo "║    Pass : vnc1234"
+          echo "╠══════════════════════════════════════════════════════════╣"
+          echo "║  OpenVSCode Server (Browser IDE)"
+          echo "║    URL  : http://$env:TAILSCALE_IP:8080"
+          echo "║    Auth : none (open access via Tailscale)"
+          echo "╠══════════════════════════════════════════════════════════╣"
+          echo "║  NOTE: Install Tailscale on YOUR machine first!"
+          echo "║  https://tailscale.com/download"
+          echo "╚══════════════════════════════════════════════════════════╝"
 
       - name: Keep session alive
         shell: powershell
@@ -156,13 +161,23 @@ jobs:
           $minutes = [int]"${{ github.event.inputs.session_duration }}"
           if ($minutes -gt 350) { $minutes = 350 }
           $seconds = $minutes * 60
-          echo "⏱ Session will stay alive for $minutes minutes..."
           $interval = 30
           $elapsed = 0
+          echo "⏱ Session alive for $minutes minutes. Connect now!"
           while ($elapsed -lt $seconds) {
             Start-Sleep -Seconds $interval
             $elapsed += $interval
             $remaining = [math]::Round(($seconds - $elapsed) / 60, 1)
-            echo "[$elapsed s elapsed] ~$remaining min remaining"
+            $tailscale = "C:\Program Files\Tailscale\tailscale.exe"
+            $status = & $tailscale status --json | ConvertFrom-Json
+            echo "[$elapsed s] ~$remaining min left | Tailscale: $($status.BackendState)"
           }
           echo "🔴 Session ended."
+
+      - name: Disconnect Tailscale
+        if: always()
+        shell: powershell
+        run: |
+          $tailscale = "C:\Program Files\Tailscale\tailscale.exe"
+          & $tailscale logout
+          echo "✅ Tailscale disconnected"
