@@ -49,13 +49,32 @@ jobs:
           Start-Service -Name "tvnserver" -ErrorAction SilentlyContinue
           echo "✅ VNC Server started on port 5900"
 
-      - name: Install Node.js and code-server
+      - name: Install Node.js 18 and code-server
         shell: powershell
         run: |
-          winget install OpenJS.NodeJS.LTS --silent --accept-package-agreements --accept-source-agreements
+          # Uninstall current Node.js (v24 is too new for code-server)
+          winget uninstall OpenJS.NodeJS.LTS --silent --accept-source-agreements
+          Start-Sleep -Seconds 3
+
+          # Install Node.js 18 LTS (compatible with code-server)
+          Invoke-WebRequest -Uri "https://nodejs.org/dist/v18.20.4/node-v18.20.4-x64.msi" -OutFile "node18.msi"
+          Start-Process msiexec -ArgumentList "/i node18.msi /quiet /norestart" -Wait
+          Start-Sleep -Seconds 5
+
+          # Refresh PATH
           $env:PATH = [System.Environment]::GetEnvironmentVariable("PATH","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("PATH","User")
-          npm install -g code-server
-          Start-Process -FilePath "code-server" -ArgumentList "--auth password --bind-addr 0.0.0.0:8080 --password vscode1234" -NoNewWindow
+
+          # Verify node version
+          node --version
+
+          # Install code-server
+          npm install -g code-server --unsafe-perm
+
+          # Start code-server
+          $env:PATH = [System.Environment]::GetEnvironmentVariable("PATH","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("PATH","User")
+          $codeServer = (Get-Command code-server).Source
+          Start-Process -FilePath "node" -ArgumentList "$codeServer --auth password --bind-addr 0.0.0.0:8080 --password vscode1234" -NoNewWindow
+          Start-Sleep -Seconds 5
           echo "✅ code-server started on port 8080"
 
       - name: Install Tailscale
