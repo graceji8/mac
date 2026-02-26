@@ -142,41 +142,20 @@ jobs:
           echo "✅ OAuth token obtained"
 
       - name: Connect to Tailscale
+        uses: tailscale/github-action@v2
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          tags: tag:ci
+          hostname: github-runner-${{ github.run_id }}
+
+      - name: Get Tailscale IP
         shell: powershell
         run: |
-          $tailscale = $env:TAILSCALE_BIN
-          echo "Tailscale binary: $tailscale"
-
-          # Check tailscale service is running
-          Start-Service -Name "Tailscale" -ErrorAction SilentlyContinue
-          Start-Sleep -Seconds 3
-
-          # Run tailscale up and capture output
-          echo "Running tailscale up..."
-          $output = & $tailscale up `
-            --authkey=$env:TS_ACCESS_TOKEN `
-            --hostname="github-runner-${{ github.run_id }}" `
-            --accept-routes `
-            --accept-dns=false 2>&1
-          echo "Output: $output"
-          Start-Sleep -Seconds 15
-
-          # Check status
-          $status = & $tailscale status 2>&1
-          echo "Status: $status"
-
-          # Get IP
-          $ip = & $tailscale ip -4 2>&1
-          echo "IP result: $ip"
-
-          if ($ip -match '\d+\.\d+\.\d+\.\d+') {
-            echo "TAILSCALE_IP=$ip" >> $env:GITHUB_ENV
-            echo "✅ Connected! Tailscale IP: $ip"
-          } else {
-            echo "❌ Failed to get IP. Full status:"
-            & $tailscale status --json 2>&1
-            exit 1
-          }
+          Start-Sleep -Seconds 5
+          $ip = tailscale ip -4
+          "TAILSCALE_IP=$ip" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          echo "✅ Tailscale IP: $ip"
 
       - name: Print Connection Summary
         shell: powershell
@@ -190,8 +169,6 @@ jobs:
           echo "║  Pass : P@ssw0rd!RDP2024"
           echo "╠══════════════════════════════════════════════╣"
           echo "║  VNC  → $env:TAILSCALE_IP:5900  Pass: vnc1234"
-          echo "╠══════════════════════════════════════════════╣"
-          echo "║  IDE  → http://$env:TAILSCALE_IP:8080"
           echo "╚══════════════════════════════════════════════╝"
 
       - name: Keep session alive
@@ -210,13 +187,3 @@ jobs:
             echo "[$elapsed s] ~$remaining min remaining"
           }
           echo "🔴 Session ended"
-
-      - name: Disconnect Tailscale
-        if: always()
-        shell: powershell
-        run: |
-          $tailscale = $env:TAILSCALE_BIN
-          if ($tailscale -and (Test-Path $tailscale)) {
-            & "$tailscale" logout
-            echo "✅ Tailscale disconnected"
-          }
